@@ -1,0 +1,5 @@
+# Bundled BitTrace plugins (discovered via ServiceLoader).
+org.bittrace.plugin.builtin.PrecisionThemePlugin
+org.bittrace.plugin.builtin.RawFormatter
+org.bittrace.plugin.builtin.HexFormatter
+org.bittrace.plugin.builtin.JsonFormatter

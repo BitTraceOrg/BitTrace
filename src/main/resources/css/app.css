@@ -1,0 +1,296 @@
+/*
+ * BitTrace — "Precision" theme.
+ *
+ * Layered on top of AtlantaFX PrimerDark. Rather than restyle every control,
+ * we remap AtlantaFX's looked-up colour tokens to the Precision palette (see
+ * DESIGN.md §2) in `.root`; because every component reads these tokens, the
+ * whole scene shifts palette at once. The remaining rules add what the theme
+ * has no notion of: the zero-radius rule, the hairline grid density, the 2px
+ * accent selection bar, square scrollbars, and the title/status bands.
+ */
+
+/* ---------------------------------------------------------------------------
+ * Palette — remap AtlantaFX tokens to the Precision surfaces/text/lines.
+ * ------------------------------------------------------------------------- */
+.root {
+    /* Surfaces (DESIGN.md §2) */
+    -color-bg-inset:   #0a0b0c;   /* bg     — app background, inset fields   */
+    -color-bg-default: #0d0f11;   /* panel  — table + control surfaces       */
+    -color-bg-subtle:  #15181b;   /* head   — header bars, section headers   */
+    -color-bg-overlay: #101214;   /* chrome — popovers, bands                */
+
+    /* Text */
+    -color-fg-default: #dfe3e6;   /* text  — primary data values             */
+    -color-fg-muted:   #8d959b;   /* dim   — secondary text, titles          */
+    -color-fg-subtle:  #5c646a;   /* faint — micro-labels, column headers    */
+
+    /* Lines */
+    -color-border-default: #22262a;  /* line  — structural borders           */
+    -color-border-muted:   #1a1e21;  /* line2 — internal row/cell dividers    */
+    -color-border-subtle:  #1a1e21;
+
+    /* Accent — one blue for brand/selection/active/focus */
+    -color-accent-fg:       #3b9dff;
+    -color-accent-emphasis: #3b9dff;
+    -color-accent-muted:    #2b6d9e;
+    -color-accent-subtle:   #152230;   /* sel — selected row / active tint   */
+
+    /* Semantic colours are reserved for data (status, timings) */
+    -color-success-fg: #57c98b;  -color-success-emphasis: #57c98b;
+    -color-success-muted: #2f6b4b; -color-success-subtle: #12251b;
+    -color-danger-fg:  #ef5f5f;  -color-danger-emphasis:  #ef5f5f;
+    -color-danger-muted: #7a3232; -color-danger-subtle:  #2a1616;
+    -color-warning-fg: #e0a83c;  -color-warning-emphasis: #e0a83c;
+    -color-warning-muted: #6e5320; -color-warning-subtle: #241c10;
+
+    -color-shadow-default: rgba(0, 0, 0, 0.6);
+
+    /* UI chrome is sans; data is mono (applied per-node below). */
+    -fx-font-family: "Space Grotesk", "Segoe UI", "system-ui", sans-serif;
+    -fx-font-size: 13px;
+
+    /* Grayscale antialiasing. JavaFX defaults to LCD subpixel text, which
+     * fringes badly on dark backgrounds (reads as "pixelated" edges); gray AA
+     * renders these thin fonts cleanly. Inherited by every text node. */
+    -fx-font-smoothing-type: gray;
+
+    /* The app background is the darkest surface; panels sit on top of it. */
+    -fx-background-color: -color-bg-inset;
+
+    /* No focus glow — focus is shown by an accent border instead (§4). */
+    -fx-focus-color: transparent;
+    -fx-faint-focus-color: transparent;
+}
+
+/* Zero corner radius, everywhere. No exceptions (DESIGN.md §4). */
+* {
+    -fx-background-radius: 0;
+    -fx-border-radius: 0;
+}
+
+/* ---------------------------------------------------------------------------
+ * Data typography — monospace for values, everywhere data is shown.
+ * ------------------------------------------------------------------------- */
+.inspector-mono,
+.inspector-mono .text {
+    -fx-font-family: "JetBrains Mono", "Cascadia Mono", "Consolas", monospace;
+    -fx-font-size: 13px;
+}
+
+/* Read-only body/raw/hex views read as a canvas, not an input field. */
+.inspector-mono.text-area,
+.inspector-mono.text-area .content {
+    -fx-background-color: -color-bg-inset;
+    -fx-background-insets: 0;
+    -fx-border-width: 0;
+}
+
+.inspector {
+    -fx-background-color: -color-bg-default;
+}
+
+/* The bar and strips frame the overview into hairline-separated bands. */
+.inspector-bar,
+.inspector-strip {
+    -fx-background-color: -color-bg-subtle;
+    -fx-border-color: -color-border-default;
+    -fx-border-width: 0 0 1 0;
+}
+
+/* Segmented tabs (§6.4): sans 10.5, active tab solid accent w/ dark-on-accent
+ * text. The explicit size keeps them from inheriting the 11px root default and
+ * mismatching the 9.5px column headers. */
+.inspector-bar .toggle-button {
+    -fx-background-color: transparent;
+    -fx-text-fill: -color-fg-muted;
+    -fx-font-family: "Space Grotesk", "Segoe UI", "system-ui", sans-serif;
+    -fx-font-size: 12.5px;
+    /* Thinner tabs: drop the button's vertical padding so height follows the
+     * text, not the theme's default button padding. Font size is unchanged. */
+    -fx-padding: 0 10 0 10;
+}
+.inspector-bar .toggle-button:selected {
+    -fx-background-color: -color-accent-emphasis;
+    -fx-text-fill: #0a0b0c;
+}
+
+.status-marker {
+    -fx-background-radius: 0;
+}
+
+/* ---------------------------------------------------------------------------
+ * Flow table — hairline grid, 22px rows, 24px headers, 2px accent select bar.
+ * ------------------------------------------------------------------------- */
+.flow-grid {
+    -fx-background-color: -color-bg-default;
+    -fx-table-cell-border-color: -color-border-muted;
+}
+
+.flow-grid .column-header-background {
+    -fx-background-color: -color-bg-subtle;
+}
+.flow-grid .column-header,
+.flow-grid .filler {
+    -fx-background-color: transparent;
+    -fx-border-color: transparent -color-border-muted -color-border-default transparent;
+    -fx-border-width: 1;
+    -fx-pref-height: 24px;
+}
+.flow-grid .column-header .label {
+    -fx-font-family: "Space Grotesk", "Segoe UI", "system-ui", sans-serif;
+    -fx-font-size: 11.5px;
+    -fx-text-fill: -color-fg-subtle;
+}
+
+.flow-grid .table-row-cell {
+    -fx-cell-size: 22px;
+    -fx-background-color: transparent;
+    -fx-border-color: transparent transparent -color-border-muted transparent;
+    -fx-border-width: 0 0 1 0;
+}
+.flow-grid .table-row-cell:filled:hover {
+    -fx-background-color: #14181c;
+}
+/* Two background layers: accent underneath, the selected fill inset 2px from
+ * the left — leaving a 2px accent bar flush to the left edge (§8, §9.4). */
+.flow-grid .table-row-cell:filled:selected {
+    -fx-background-color: -color-accent-emphasis, -color-accent-subtle;
+    -fx-background-insets: 0, 0 0 0 2;
+}
+
+.flow-grid .table-cell {
+    -fx-font-family: "JetBrains Mono", "Cascadia Mono", "Consolas", monospace;
+    -fx-font-size: 13px;
+    -fx-text-fill: -color-fg-default;
+    -fx-padding: 0 8 0 8;
+    -fx-border-color: transparent -color-border-muted transparent transparent;
+    -fx-border-width: 0 1 0 0;
+}
+.flow-grid .table-row-cell:empty,
+.flow-grid .table-row-cell:empty .table-cell {
+    -fx-border-color: transparent;
+}
+
+/* ---------------------------------------------------------------------------
+ * Buttons — flat, 1px hairline border, no radius; accent when toggled (§8).
+ * ------------------------------------------------------------------------- */
+.title-bar .button {
+    -fx-background-color: transparent;
+    -fx-border-color: -color-border-default;
+    -fx-border-width: 1;
+    -fx-text-fill: -color-fg-muted;
+    -fx-padding: 0 10 0 10;
+}
+.title-bar .button:hover {
+    -fx-border-color: #3a4046;
+    -fx-text-fill: -color-fg-default;
+}
+
+/* ---------------------------------------------------------------------------
+ * Title / status bands.
+ * ------------------------------------------------------------------------- */
+.title-bar {
+    -fx-background-color: -color-bg-overlay;   /* chrome */
+    -fx-border-color: -color-border-default;
+    -fx-border-width: 0 0 1 0;
+}
+.brand-glyph {
+    -fx-background-color: -color-accent-emphasis;
+}
+.brand-glyph .inner {
+    -fx-background-color: -color-bg-inset;
+}
+.brand-label {
+    -fx-font-family: "Space Grotesk", "Segoe UI", "system-ui", sans-serif;
+    -fx-font-size: 13.5px;
+    -fx-font-weight: bold;
+    -fx-text-fill: -color-fg-default;
+}
+
+.status-bar {
+    -fx-background-color: -color-bg-overlay;   /* chrome */
+    -fx-border-color: -color-border-default;
+    -fx-border-width: 1 0 0 0;
+}
+.status-bar .label {
+    -fx-font-family: "JetBrains Mono", "Cascadia Mono", "Consolas", monospace;
+    -fx-font-size: 12.5px;
+}
+.live-dot {
+    -fx-background-color: -color-accent-emphasis;
+}
+
+/* ---------------------------------------------------------------------------
+ * Popover (column filter) — chrome background, 1px accent border (§6.9).
+ * ------------------------------------------------------------------------- */
+.popover > .border {
+    -fx-fill: -color-bg-overlay;
+    -fx-stroke: -color-accent-emphasis;
+}
+.popover .content {
+    -fx-background-color: -color-bg-overlay;
+}
+
+/* ---------------------------------------------------------------------------
+ * Split-pane dividers — 5px, chrome, 1px hairline both sides (§6.15).
+ * ------------------------------------------------------------------------- */
+.split-pane > .split-pane-divider {
+    -fx-background-color: -color-bg-overlay;
+    -fx-padding: 0;
+    -fx-pref-width: 5px;
+    -fx-pref-height: 5px;
+}
+.split-pane:horizontal > .split-pane-divider {
+    -fx-border-color: -color-border-default;
+    -fx-border-width: 0 1 0 1;
+}
+.split-pane:vertical > .split-pane-divider {
+    -fx-border-color: -color-border-default;
+    -fx-border-width: 1 0 1 0;
+}
+
+/* ---------------------------------------------------------------------------
+ * Scrollbars — 11px, square thumb, no arrow buttons (§2, §9.6).
+ * ------------------------------------------------------------------------- */
+.scroll-bar {
+    -fx-background-color: -color-bg-default;
+    -fx-pref-width: 11px;
+    -fx-pref-height: 11px;
+}
+.scroll-bar .thumb {
+    -fx-background-color: #2b3035;
+    -fx-background-insets: 0;
+    -fx-background-radius: 0;
+}
+.scroll-bar .thumb:hover {
+    -fx-background-color: #3a4046;
+}
+.scroll-bar .track {
+    -fx-background-color: transparent;
+}
+.scroll-bar .increment-button,
+.scroll-bar .decrement-button {
+    -fx-pref-width: 0;
+    -fx-pref-height: 0;
+    -fx-padding: 0;
+}
+.scroll-bar .increment-arrow,
+.scroll-bar .decrement-arrow {
+    -fx-shape: null;
+    -fx-padding: 0;
+}
+
+/* ScrollPane viewports should not paint their own (lighter) background. */
+.scroll-pane,
+.scroll-pane > .viewport {
+    -fx-background-color: transparent;
+}
+
+/* ---------------------------------------------------------------------------
+ * Chrome hover states (mirroring the prototype's .pz-* rules). Only apply where
+ * the element has no inline background of its own (inline styles win over these).
+ * ------------------------------------------------------------------------- */
+.pz-menu:hover { -fx-background-color: #152230; }
+.pz-btn:hover  { -fx-border-color: #3a4046; }
+.pz-rail:hover { -fx-background-color: #171b1f; }
+.pz-row:hover  { -fx-background-color: #14181c; }

@@ -99,7 +99,7 @@ private fun Pane(
                         Modifier.background(if (on) P.accent else Color.Transparent)
                             .clickable { tab = t }
                             .padding(horizontal = 8.dp, vertical = 2.dp),
-                    ) { PzText(t, color = if (on) P.bg else P.dim, size = 12, family = P.Ui) }
+                    ) { PzText(t, color = if (on) P.bg else P.dim, size = 12, family = P.Ui, softWrap = false) }
                 }
             }
         }

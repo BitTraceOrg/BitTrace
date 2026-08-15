@@ -165,7 +165,7 @@ private fun TrafficView(
             settings.update { it.copy(inspectorHeightDp = (it.inspectorHeightDp - delta.value).coerceIn(120f, 640f)) }
         }
         Box(Modifier.fillMaxWidth().height(inspectorHeight)) {
-            Inspector(selectedId?.let { store.get(it) }, service::body, settings, formatters)
+            Inspector(selectedId?.let { store.get(it) }, service::body, settings/*, formatters*/)
         }
     }
 }

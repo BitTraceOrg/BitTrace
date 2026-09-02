@@ -6,6 +6,8 @@ import java.awt.EventQueue
 
 /** One log line, stamped with its receipt time. */
 data class LogRecord(
+    /** Monotonic id, unique for the session — stable identity for list rendering. */
+    val seq: Long,
     val timeMillis: Long,
     val level: String,
     val source: String,
@@ -21,6 +23,9 @@ class LogStore(private val capacity: Int = 2000) {
 
     private val backing = mutableStateListOf<LogRecord>()
 
+    /** Next [LogRecord.seq]; only touched on the UI thread, like [backing]. */
+    private var nextSeq = 0L
+
     /** Observable log records, oldest first. */
     val records: SnapshotStateList<LogRecord> get() = backing
 
@@ -28,7 +33,7 @@ class LogStore(private val capacity: Int = 2000) {
     val errorCount: Int get() = backing.count { it.level.equals("error", ignoreCase = true) }
 
     fun add(level: String, source: String, message: String): Unit = onUi {
-        backing.add(LogRecord(System.currentTimeMillis(), level, source, message))
+        backing.add(LogRecord(nextSeq++, System.currentTimeMillis(), level, source, message))
         while (backing.size > capacity) backing.removeAt(0)
     }
 

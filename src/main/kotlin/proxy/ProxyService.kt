@@ -4,7 +4,7 @@ import org.bittrace.data.CompleteRequestMessage
 import org.bittrace.data.CompleteResponseMessage
 import org.bittrace.data.InitialRequestData
 import org.bittrace.data.InitialResponseData
-import org.bittrace.data.TrafficStore
+import org.bittrace.data.SessionStore
 
 /**
  * Ties the sidecar to the app: traffic metadata goes into [store], raw bodies
@@ -16,7 +16,7 @@ import org.bittrace.data.TrafficStore
  * JavaFX thread.
  */
 class ProxyService(
-    private val store: TrafficStore,
+    private val store: SessionStore,
     val bodies: BodyCache = BodyCache(),
     private val onLog: (LogEntry) -> Unit = {},
     private val onExit: (Int) -> Unit = {},

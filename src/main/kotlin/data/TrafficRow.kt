@@ -14,6 +14,8 @@ import androidx.compose.runtime.setValue
 class TrafficRow(
     val rowCount: Int,
     val request: InitialRequestData,
+    /** [LIVE_SESSION] for captured flows, or the id of the import it came from. */
+    val sessionId: Int = LIVE_SESSION,
 ) {
     val id: String get() = request.id
 

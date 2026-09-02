@@ -2,11 +2,23 @@ package org.bittrace.ui
 
 import androidx.compose.foundation.border
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+
+/**
+ * Shows a control only while [visible], without taking it out of the layout.
+ *
+ * Adding a row's action button on hover makes the row change size as the
+ * pointer crosses it, so every row under it jumps; keeping the same node laid
+ * out and merely hiding it means the two heights cannot disagree. Pair it with
+ * the control's own `enabled`, because alpha alone leaves an invisible button
+ * that still answers a click.
+ */
+fun Modifier.revealed(visible: Boolean): Modifier = alpha(if (visible) 1f else 0f)
 
 /** A full 1px hairline border. */
 fun Modifier.border1(color: Color, width: Dp = 1.dp): Modifier = border(width, color)

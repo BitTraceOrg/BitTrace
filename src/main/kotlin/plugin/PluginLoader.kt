@@ -1,14 +1,26 @@
 package org.bittrace.plugin
 
-import org.bittrace.plugin.Plugin
-import org.bittrace.plugin.PluginHost
-import org.bittrace.data.SettingsStore
 import java.net.URLClassLoader
 import java.util.ServiceLoader
+import org.bittrace.data.SettingsStore
+import org.bittrace.plugin.Plugin
+import org.bittrace.plugin.PluginHost
+import org.bittrace.ui.copyToClipboard as copyTextToClipboard
 
-/** Host services handed to each plugin's `init`. */
-private class AppPluginHost : PluginHost {
-    override fun log(message: String) = System.err.println("[plugin] $message")
+/**
+ * Host services handed to each plugin's `init`.
+ *
+ * Logging goes wherever [onLog] points — the app's log store in a running app,
+ * stderr when nobody is listening — so a plugin failure is visible in the UI
+ * rather than only in a console the user does not have open.
+ */
+private class AppPluginHost(private val onLog: (String, String) -> Unit) : PluginHost {
+    override fun log(level: String, message: String) = onLog(level, message)
+
+    // The app's own clipboard helper, aliased on import so this override does
+    // not resolve to itself. One real implementation behind both the internal
+    // calls and the plugin-facing one.
+    override fun copyToClipboard(text: String): Boolean = copyTextToClipboard(text)
 }
 
 /**
@@ -29,8 +41,15 @@ object PluginLoader {
     /** Directory scanned for external plugin JARs. */
     val pluginsDir get() = SettingsStore.defaultPath().parent?.resolve("plugins")
 
-    fun load(): PluginRegistry {
-        val host = AppPluginHost()
+    /**
+     * Loads every plugin, reporting progress and failures through [onLog].
+     *
+     * [onLog] takes a level and a message, like the proxy and session importers
+     * do; the caller decides where they land. The default writes to stderr, for
+     * a load that happens before any UI exists.
+     */
+    fun load(onLog: (String, String) -> Unit = ::printLog): PluginRegistry {
+        val host = AppPluginHost(onLog)
         val byId = LinkedHashMap<String, Plugin>()
 
         val appLoader = Plugin::class.java.classLoader
@@ -42,6 +61,8 @@ object PluginLoader {
         return PluginRegistry(byId.values.toList())
     }
 
+    private fun printLog(level: String, message: String) = System.err.println("[plugin/$level] $message")
+
     /** A classloader over the external plugin JARs, or null if none/absent. */
     private fun externalLoader(parent: ClassLoader, host: PluginHost): URLClassLoader? {
         val dir = pluginsDir?.toFile() ?: return null
@@ -50,7 +71,7 @@ object PluginLoader {
         return try {
             URLClassLoader(jars.map { it.toURI().toURL() }.toTypedArray(), parent)
         } catch (e: Throwable) {
-            host.log("failed to open plugins dir: $e"); null
+            host.log("error", "failed to open plugins dir: $e"); null
         }
     }
 
@@ -61,21 +82,37 @@ object PluginLoader {
             val hasNext = try {
                 it.hasNext()
             } catch (e: Throwable) {
-                host.log("plugin discovery error: $e"); break
+                host.log("error", "plugin discovery error: $e"); break
             }
             if (!hasNext) break
 
             val plugin = try {
                 it.next()
             } catch (e: Throwable) {
-                host.log("plugin instantiation error: $e"); continue
+                host.log("error", "plugin instantiation error: $e"); continue
             }
 
-            if (into.containsKey(plugin.id)) continue
+            val existing = into[plugin.id]
+            if (existing != null) {
+                // The external pass runs a ServiceLoader over a classloader whose
+                // parent is the app's, so it re-discovers every bundled provider —
+                // the *same class* a second time, which is structural and not
+                // worth a word. A different class claiming a taken id is a real
+                // clash, though: usually an old JAR left in the plugins folder,
+                // and staying quiet about it makes the new one look simply broken.
+                if (existing.javaClass != plugin.javaClass) {
+                    host.log(
+                        "warn",
+                        "ignored '${plugin.javaClass.name}': id '${plugin.id}' " +
+                            "is already taken by '${existing.javaClass.name}'",
+                    )
+                }
+                continue
+            }
             try {
                 plugin.init(host)
             } catch (e: Throwable) {
-                host.log("init '${plugin.id}' failed: $e"); continue
+                host.log("error", "init '${plugin.id}' failed: $e"); continue
             }
             into[plugin.id] = plugin
         }

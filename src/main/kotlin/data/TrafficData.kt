@@ -5,13 +5,14 @@ import kotlinx.serialization.Serializable
 
 // Kotlin mirror of src/types/TrafficData.ts (HAR-compatible sub-types).
 
-@Serializable
+/** Header, query and request-cookie pairs; pooled as they decode (see [NameValuePairSerializer]). */
+@Serializable(with = NameValuePairSerializer::class)
 data class NameValuePair(
     val name: String,
     val value: String,
 )
 
-@Serializable
+@Serializable(with = HarCookieSerializer::class)
 data class HarCookie(
     val name: String,
     val value: String,
@@ -40,7 +41,7 @@ data class HarTimings(
 @Serializable
 data class HarContent(
     val size: Long,
-    val mimeType: String,
+    @Serializable(with = InternedStringSerializer::class) val mimeType: String,
 )
 
 // ---------------------------------------------------------------------------
@@ -113,7 +114,9 @@ data class CompleteRequestMessage(
     )
 
     @Serializable
-    data class PostData(val mimeType: String)
+    data class PostData(
+        @Serializable(with = InternedStringSerializer::class) val mimeType: String,
+    )
 }
 
 /** Emitted on `response`. Contains headers, cookies, content, and final timings. */

@@ -1,5 +1,12 @@
 package org.bittrace.proxy
 
+import java.io.File
+import java.io.InputStream
+import java.nio.charset.StandardCharsets
+import java.time.Duration
+import java.time.Instant
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
@@ -8,13 +15,6 @@ import org.bittrace.data.CompleteRequestMessage
 import org.bittrace.data.CompleteResponseMessage
 import org.bittrace.data.InitialRequestData
 import org.bittrace.data.InitialResponseData
-import java.io.File
-import java.io.InputStream
-import java.nio.charset.StandardCharsets
-import java.time.Duration
-import java.time.Instant
-import java.util.concurrent.TimeUnit
-import java.util.concurrent.atomic.AtomicReference
 
 /**
  * Runs the MITMConnect sidecar and turns its stdout into typed traffic events.

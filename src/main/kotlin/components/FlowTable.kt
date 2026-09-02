@@ -1,352 +1,476 @@
 package org.bittrace.components
 
-import androidx.compose.foundation.Canvas
+import org.jetbrains.jewel.ui.icons.AllIconsKeys
+import org.bittrace.ui.copyToClipboard
+import org.bittrace.plugin.flow.FlowActionContext
+import org.bittrace.plugin.flow.FlowActionPlugin
+import org.bittrace.plugin.flow.FlowBodySide
+import org.bittrace.plugin.flow.FlowHeader
+import org.bittrace.plugin.flow.FlowTarget
+import org.bittrace.proxy.BodySide
+import org.jetbrains.jewel.ui.component.separator
+import org.bittrace.ui.Typo
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectDragGestures
-import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateMapOf
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshots.SnapshotStateList
 import androidx.compose.runtime.snapshots.SnapshotStateMap
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.input.pointer.PointerIcon
-import androidx.compose.ui.input.pointer.pointerHoverIcon
-import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.layout.onGloballyPositioned
-import androidx.compose.ui.layout.positionInRoot
-import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
-import androidx.compose.ui.window.Popup
-import androidx.compose.ui.window.PopupProperties
+import org.bittrace.data.ExportMark
+import org.bittrace.data.LIVE_SESSION
 import org.bittrace.data.TrafficRow
+import org.bittrace.ui.CellText
+import org.bittrace.ui.ColumnFilter
+import org.bittrace.ui.DataGrid
+import org.bittrace.ui.GridColumn
+import org.bittrace.ui.GridMarkers
 import org.bittrace.ui.P
 import org.bittrace.ui.PzText
-import org.bittrace.ui.border1
 import org.bittrace.ui.bottomBorder
-import org.bittrace.ui.leftBorder
-import org.bittrace.ui.rightBorder
-import java.awt.Cursor
-
-/** East-west resize cursor shown when hovering a column edge. */
-private val ResizeCursor = PointerIcon(Cursor(Cursor.E_RESIZE_CURSOR))
-
-/** Minimum on-screen column width, in px, enforced while resizing. */
-private const val MIN_COL_PX = 28f
+import org.bittrace.ui.topBorder
 
 /**
- * One flow-table column. Columns are laid out by [weight] so they always fill
- * the table width and reflow when the window resizes; dragging a column edge
- * shifts weight between neighbours. Held in a snapshot list so headers can also
- * be dragged to reorder. [value] backs filtering; [cell] renders the value.
+ * A flow-table column — the shared [GridColumn] bound to traffic rows. Columns
+ * are laid out by weight so they always fill the table width, are resizable by
+ * dragging their edge, and reorderable by dragging the header.
  */
-class Col(
-    val key: String,
-    val label: String,
-    initialWeight: Float,
-    val end: Boolean = false,
-    val filterable: Boolean = true,
-    val presets: List<String> = emptyList(),
-    val value: (TrafficRow) -> String,
-    val cell: @Composable (TrafficRow) -> Unit,
-) {
-    var weight by mutableStateOf(initialWeight)
+typealias Col = GridColumn<TrafficRow>
+
+// --- filter vocabularies -----------------------------------------------------
+//
+// Declared here, above everything that builds a column, and that placement is
+// load-bearing: `DEFAULT_COLUMN_KEYS` below calls `defaultColumns()` while this
+// file is still initialising, so a facet list declared *after* it would still be
+// null when a column asked for it — which fails as a null check on a parameter
+// that has a default, several frames from the real cause.
+
+/**
+ * Status classes, as the Code column filters by.
+ *
+ * `ERR` is not a class the RFC knows: it is a flow that never got a status at
+ * all — a reset, a DNS failure, a timeout — and it is the one people look for
+ * most, so it sits with the others rather than in a control of its own.
+ */
+val STATUS_CLASSES = listOf("1xx", "2xx", "3xx", "4xx", "5xx", "ERR")
+
+/** Which class a row's status falls in. */
+fun statusClassOf(row: TrafficRow): String {
+    val response = row.response ?: return "ERR"
+    if (response.error) return "ERR"
+    val status = response.response.status
+    return if (status in 100..599) "${status / 100}xx" else "ERR"
+}
+
+/**
+ * Every method the filter offers.
+ *
+ * RFC 9110's set plus PATCH and the WebDAV verbs that turn up in real traffic.
+ * Listed rather than derived, for the same reason as the status classes: you
+ * filter for DELETE *before* one happens, which is when it matters.
+ */
+val HTTP_METHOD_FACETS = listOf(
+    "GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "CONNECT", "OPTIONS", "TRACE",
+    "PROPFIND", "PROPPATCH", "MKCOL", "COPY", "MOVE", "LOCK", "UNLOCK",
+)
+
+/**
+ * The kinds the Type column sorts traffic into.
+ *
+ * Buckets rather than raw content types: a hundred distinct MIME strings is a
+ * list nobody reads, and "is this an image" is the question being asked. Must
+ * stay in step with `kindOfRow`, which is what assigns them.
+ */
+val CONTENT_KINDS = listOf("html", "css", "js", "json", "xml", "img", "font", "media", "text", "bin")
+
+/**
+ * Every column the flow table can show, in catalog order — the order the
+ * settings list presents them in, and the order enabled ones are built in.
+ *
+ * Columns are opt-in: [DEFAULT_COLUMN_KEYS] is what a fresh install shows, and
+ * the rest stay hidden until switched on in Settings.
+ */
+fun columnCatalog(): List<Col> = defaultColumns() + optionalColumns()
+
+/** Keys shown when nothing has been chosen (DESIGN.md §6.8). */
+val DEFAULT_COLUMN_KEYS: List<String> = defaultColumns().map { it.key }
+
+/**
+ * The enabled columns, in catalog order.
+ *
+ * An empty [enabledKeys] means "defaults"; so does a set that matches no known
+ * column, so a stale settings file can never leave the table with no columns.
+ */
+fun columnsFor(enabledKeys: List<String>): List<Col> {
+    val keys = enabledKeys.toSet()
+    val chosen = columnCatalog().filter { it.key in keys }
+    return chosen.ifEmpty { defaultColumns() }
 }
 
 /** The default column set (DESIGN.md §6.8). `#` is not filterable. */
 fun defaultColumns(): List<Col> = listOf(
     Col("id", "#", 36f, end = true, filterable = false, value = { it.rowCount.toString() }) {
-        CText(it.rowCount.toString(), P.faint)
+        CellText(it.rowCount.toString(), P.faint)
     },
-    Col("st", "CODE", 40f, presets = listOf("200", "301", "404", "ERR"), value = { statusOf(it).first }) {
-        val (t, c) = statusOf(it); CText(t, c)
+    // Ticked by class rather than by code: nobody filters for 418, and a list
+    // of every status seen so far cannot offer 5xx until one has arrived —
+    // which is exactly when you have stopped needing to ask for it.
+    Col(
+        "st", "Code", 40f,
+        facets = STATUS_CLASSES,
+        value = { statusOf(it).first },
+        facet = { statusClassOf(it) },
+    ) {
+        val (t, c) = statusOf(it); CellText(t, c)
     },
-    Col("method", "METHOD", 60f, presets = listOf("GET", "POST", "PUT", "HEAD"),
-        value = { it.request.request.method }) { CText(it.request.request.method, P.info) },
-    Col("url", "HOST / PATH", 380f, value = { it.request.request.url }) {
+    Col(
+        "method", "Method", 60f,
+        facets = HTTP_METHOD_FACETS,
+        value = { it.request.request.method },
+        facet = { it.request.request.method.uppercase() },
+    ) { CellText(it.request.request.method, P.info) },
+    // Faceted by host: the popup lists every host captured, ticking any number
+    // of them. Typing still matches the whole URL, so path filtering survives.
+    Col(
+        "url", "Host / path", 380f,
+        value = { it.request.request.url },
+        facet = { hostPath(it.request.request.url).first },
+    ) {
         val url = it.request.request.url
         val scheme = url.substringBefore("://", "")
         val (host, path) = hostPath(url)
         Row {
             if (scheme.isNotEmpty()) {
-                CText(scheme, if (scheme == "https") P.ok else P.warn)
-                CText("://", P.faint)
+                CellText(scheme, if (scheme == "https") P.ok else P.warn)
+                CellText("://", P.faint)
             }
-            CText(host, P.faint)
-            CText(path, P.text)
+            CellText(host, P.faint)
+            CellText(path, P.text)
         }
     },
-    Col("type", "TYPE", 50f, presets = listOf("html", "css", "js", "img", "text"),
-        value = { kindOf(it.request.request.url) }) { CText(kindOf(it.request.request.url), P.dim) },
+    Col(
+        "type", "Type", 50f,
+        facets = CONTENT_KINDS,
+        value = { kindOfRow(it) },
+        facet = { kindOfRow(it) },
+    ) { CellText(kindOfRow(it), P.dim) },
     Col("tls", "TLS", 56f, presets = listOf("1.3", "1.2", "none"), value = { tlsText(it) }) {
-        val t = tlsText(it); CText(t, if (t == "—") P.faint else P.ok)
+        val t = tlsText(it); CellText(t, if (t == "—") P.faint else P.ok)
     },
-    Col("size", "SIZE", 64f, end = true, value = { bytesStr(it.response?.response?.bodySize) }) {
+    Col(
+        "size", "Size", 64f, end = true,
+        value = { bytesStr(it.response?.response?.bodySize) },
+        // Compared rather than matched: a size is the one column where the
+        // question is always a threshold.
+        numeric = { it.response?.response?.bodySize?.takeIf { size -> size >= 0 } },
+    ) {
         val s = it.response?.response?.bodySize
-        CText(bytesStr(s), if (s == null || s < 0) P.err else P.text)
+        CellText(bytesStr(s), if (s == null || s < 0) P.err else P.text)
     },
-    Col("time", "TIME", 60f, end = true, value = { durStr(it) }) {
-        CText(durStr(it), if (it.response?.error == true) P.err else P.text)
+    Col("time", "Time", 60f, end = true, value = { durStr(it) }) {
+        CellText(durStr(it), if (it.response?.error == true) P.err else P.text)
     },
-    Col("start", "START", 72f, value = { startStr(it) }) { CText(startStr(it), P.dim) },
-    Col("end", "END", 72f, value = { endStr(it) }) { CText(endStr(it), P.dim) },
+    Col("start", "Start", 72f, value = { startStr(it) }) { CellText(startStr(it), P.dim) },
+    Col("end", "End", 72f, value = { endStr(it) }) { CellText(endStr(it), P.dim) },
 )
 
-/** Rows passing every active column filter (case-insensitive substring). */
-fun applyFilters(rows: List<TrafficRow>, cols: List<Col>, filters: Map<String, String>): List<TrafficRow> {
-    val active = cols.mapNotNull { c -> filters[c.key]?.takeIf { it.isNotBlank() }?.let { c to it } }
-    if (active.isEmpty()) return rows
-    return rows.filter { row -> active.all { (c, term) -> c.value(row).contains(term, ignoreCase = true) } }
+/**
+ * Columns that are off until switched on: the four halves of the transfer,
+ * broken out for anyone sizing up header overhead against payload.
+ */
+fun optionalColumns(): List<Col> = listOf(
+    Col("reqHeaderSize", "Req hdr", 64f, end = true,
+        value = { bytesStr(it.request.request.headersSize) }) {
+        CellText(bytesStr(it.request.request.headersSize), P.dim)
+    },
+    Col("reqBodySize", "Req body", 64f, end = true,
+        value = { bytesStr(it.request.request.bodySize) }) {
+        CellText(bytesStr(it.request.request.bodySize), P.dim)
+    },
+    Col("resHeaderSize", "Res hdr", 64f, end = true,
+        value = { bytesStr(it.response?.response?.headersSize) }) {
+        CellText(bytesStr(it.response?.response?.headersSize), P.dim)
+    },
+    // Same figure the default SIZE column shows, named for symmetry with the
+    // other three so the four read as one group.
+    Col("resBodySize", "Res body", 64f, end = true,
+        value = { bytesStr(it.response?.response?.bodySize) }) {
+        CellText(bytesStr(it.response?.response?.bodySize), P.dim)
+    },
+)
+
+/**
+ * The status bar's outcome filter, driven by clicking its OK / FAILED counts.
+ *
+ * Separate from the column filters because "failed" is not a substring of any
+ * one column: a flow fails either by status code or by a reset connection, and
+ * the CODE column shows those as `500` and `ERR` respectively.
+ */
+enum class Outcome {
+    ALL,
+    OK,
+    FAILED,
+    ;
+
+    /**
+     * A flow still awaiting its response is neither ok nor failed, so it shows
+     * only under [ALL] — matching how the status bar counts them.
+     */
+    fun matches(row: TrafficRow): Boolean {
+        if (this == ALL) return true
+        val response = row.response ?: return false
+        val failed = response.error || response.response.status >= 400
+        return if (this == FAILED) failed else !failed
+    }
+}
+
+/** Applies the outcome filter; [Outcome.ALL] passes the list straight through. */
+fun applyOutcome(rows: List<TrafficRow>, outcome: Outcome): List<TrafficRow> =
+    if (outcome == Outcome.ALL) rows else rows.filter { outcome.matches(it) }
+
+/**
+ * How much each flow shows in the table.
+ *
+ * Resolved once, by [from], when the traffic view is built — never per row and
+ * never per frame. Rows and cells receive the decision as a value, so switching
+ * modes is a structural choice made at one place rather than a settings lookup
+ * repeated thousands of times as traffic streams in.
+ */
+enum class TableMode {
+    /** One line per flow. */
+    COMPACT,
+
+    /** The same line, plus a borderless second line carrying the timing ribbon. */
+    DETAILED,
+    ;
+
+    companion object {
+        /** Parses the persisted `Settings.tableMode`; anything unrecognised is compact. */
+        fun from(value: String): TableMode =
+            if (value.equals("detailed", ignoreCase = true)) DETAILED else COMPACT
+    }
+}
+
+/** One full-width line in the flow list marking a session boundary. */
+class SessionBanner(val id: String, val label: String)
+
+/**
+ * Derives the session banners for [visible].
+ *
+ * Boundaries come from runs of [TrafficRow.sessionId], not from stored
+ * positions — so a banner cannot drift when rows are filtered out, evicted, or
+ * when the row counter restarts, and a session with nothing visible produces no
+ * orphaned START/END pair. Export notes are positional by nature and attach to
+ * the last visible row at or before their anchor.
+ */
+fun sessionBanners(
+    visible: List<TrafficRow>,
+    sessionName: (Int) -> String?,
+    exportMarks: List<ExportMark>,
+): GridMarkers<SessionBanner> {
+    val leading = mutableListOf<SessionBanner>()
+    val trailing = mutableListOf<SessionBanner>()
+    val after = HashMap<Any, MutableList<SessionBanner>>()
+
+    fun emit(previous: TrafficRow?, banner: SessionBanner) {
+        if (previous == null) leading.add(banner)
+        else after.getOrPut(previous.id) { mutableListOf() }.add(banner)
+    }
+
+    fun label(id: Int, edge: String) = "SESSION ${sessionName(id) ?: id} $edge"
+
+    var current = LIVE_SESSION
+    var previous: TrafficRow? = null
+    for (row in visible) {
+        if (row.sessionId != current) {
+            if (current != LIVE_SESSION) {
+                emit(previous, SessionBanner("s$current-end", label(current, "End")))
+            }
+            if (row.sessionId != LIVE_SESSION) {
+                emit(previous, SessionBanner("s${row.sessionId}-start", label(row.sessionId, "Start")))
+            }
+            current = row.sessionId
+        }
+        previous = row
+    }
+    if (current != LIVE_SESSION) {
+        trailing.add(SessionBanner("s$current-end", label(current, "End")))
+    }
+
+    for (mark in exportMarks) {
+        val anchor = visible.lastOrNull { it.rowCount <= mark.afterRowCount }
+        val banner = SessionBanner("export-${mark.id}", "SESSION ${mark.label} END")
+        if (anchor == null || anchor === visible.lastOrNull()) trailing.add(banner)
+        else after.getOrPut(anchor.id) { mutableListOf() }.add(banner)
+    }
+
+    return GridMarkers(
+        leading = leading,
+        trailing = trailing,
+        afterKey = after,
+        key = { it.id },
+        content = { BannerRow(it) },
+    )
+}
+
+/** A session boundary: full width, label centred, clearly not a flow. */
+@Composable
+private fun BannerRow(banner: SessionBanner) {
+    Row(
+        Modifier.fillMaxWidth().height(20.dp).background(P.head)
+            .topBorder(P.accent).bottomBorder(P.accent),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.Center,
+    ) {
+        PzText(banner.label, color = P.accent, style = Typo.caption, family = P.Ui, softWrap = false)
+    }
 }
 
 @Composable
 fun FlowTable(
     cols: SnapshotStateList<Col>,
-    filters: SnapshotStateMap<String, String>,
+    filters: SnapshotStateMap<String, ColumnFilter>,
     rows: List<TrafficRow>,
+    /** Unfiltered rows, so the host list does not shrink as hosts are ticked. */
+    allRows: List<TrafficRow>,
     selectedId: String?,
+    mode: TableMode,
+    banners: GridMarkers<SessionBanner>?,
+    /** Reads a captured body, for the clipboard actions. */
+    bodyProvider: (String, BodySide) -> ByteArray?,
+    /** Plugins contributing items to a row's context menu. */
+    flowActions: List<FlowActionPlugin>,
+    /** Flows picked out for a two-row action; see the grid's own `markedKeys`. */
+    marked: Set<String>,
+    onToggleMark: (TrafficRow) -> Unit,
+    /** Opens the diff tool on the two marked flows. Null until there are two. */
+    onDiffMarked: (() -> Unit)?,
+    onNotice: (String) -> Unit,
     onSelect: (String) -> Unit,
 ) {
-    Box(Modifier.fillMaxSize().background(P.panel)) {
-        Column(Modifier.fillMaxSize()) {
-            HeaderRow(cols, filters)
-            LazyColumn(Modifier.fillMaxSize()) {
-                items(rows, key = { it.id }) { row -> DataRow(cols, row, row.id == selectedId, onSelect) }
-            }
-        }
-    }
-}
+    DataGrid(
+        columns = cols,
+        rows = rows,
+        key = { it.id },
+        modifier = Modifier.fillMaxSize().background(P.panel),
+        filters = filters,
+        filterSource = allRows,
+        selectedKey = selectedId,
+        onSelect = { onSelect(it.id) },
+        reorderable = true,
+        // Bound once from the mode, so no row ever consults the setting.
+        rowDetail = if (mode == TableMode.DETAILED) {
+            { row -> FlowTimeline(row) }
+        } else {
+            null
+        },
+        // Start the ribbon at the second column, clear of the row number.
+        rowDetailIndent = 1,
+        markers = banners,
+        markedKeys = marked,
+        onToggleMark = onToggleMark,
+        rowMenu = { row ->
+            // Every entry answers "give me this flow somewhere else" — so they
+            // all copy, and the one that fails says so rather than silently
+            // leaving the clipboard as it was.
+            selectableItem(
+                selected = false,
+                iconKey = AllIconsKeys.Actions.Copy,
+                onClick = { copyOrReport(row.request.request.url, "URL", onNotice) },
+            ) { CellText("Copy URL", P.text) }
+            selectableItem(
+                selected = false,
+                // A command you run, rather than a payload you keep.
+                iconKey = AllIconsKeys.Actions.Execute,
+                onClick = { copyOrReport(curlOf(row, bodyProvider), "cURL command", onNotice) },
+            ) { CellText("Copy as cURL", P.text) }
+            selectableItem(
+                selected = false,
+                iconKey = AllIconsKeys.General.Export,
+                onClick = { copyOrReport(harOf(row, bodyProvider), "HAR", onNotice) },
+            ) { CellText("Copy as HAR", P.text) }
 
-// ---------------------------------------------------------------------------
-// Header — drag body to reorder, drag right edge to resize, funnel to filter.
-// ---------------------------------------------------------------------------
-
-@Composable
-private fun HeaderRow(cols: SnapshotStateList<Col>, filters: SnapshotStateMap<String, String>) {
-    val bounds = remember { mutableStateMapOf<String, ClosedFloatingPointRange<Float>>() }
-    var dragging by remember { mutableStateOf<String?>(null) }
-    var pointerX by remember { mutableStateOf(0f) }
-    var openFilter by remember { mutableStateOf<String?>(null) }
-    var tableWidthPx by remember { mutableStateOf(0f) }
-
-    Row(
-        Modifier.fillMaxWidth().height(24.dp).background(P.head).bottomBorder(P.line)
-            .onGloballyPositioned { tableWidthPx = it.size.width.toFloat() },
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        cols.forEachIndexed { index, col ->
-            Box(
-                Modifier.weight(col.weight).fillMaxHeight()
-                    .then(if (index < cols.lastIndex) Modifier.rightBorder(P.line2) else Modifier)
-                    .background(if (dragging == col.key) P.accentFill else Color.Transparent)
-                    .onGloballyPositioned { c ->
-                        val x = c.positionInRoot().x
-                        bounds[col.key] = x..(x + c.size.width.toFloat())
-                    }
-                    .pointerInput(col.key, cols.size) {
-                        detectDragGestures(
-                            onDragStart = { off ->
-                                dragging = col.key
-                                pointerX = (bounds[col.key]?.start ?: 0f) + off.x
-                            },
-                            onDragEnd = { dragging = null },
-                            onDragCancel = { dragging = null },
-                        ) { change, amount ->
-                            change.consume()
-                            pointerX += amount.x
-                            val targetKey = bounds.entries.firstOrNull { pointerX in it.value }?.key
-                            val from = cols.indexOfFirst { it.key == dragging }
-                            val to = cols.indexOfFirst { it.key == targetKey }
-                            if (from >= 0 && to >= 0 && from != to) cols.add(to, cols.removeAt(from))
-                        }
-                    },
+            separator()
+            // Marking is offered here as well as on Ctrl+click, because a
+            // shortcut you have to already know about is not an affordance. One
+            // entry covers both directions, since the row's own state is what
+            // the label reads from.
+            val isMarked = row.id in marked
+            selectableItem(
+                selected = false,
+                iconKey = if (isMarked) AllIconsKeys.Actions.Cancel else AllIconsKeys.General.Add,
+                onClick = { onToggleMark(row) },
+            ) { CellText(if (isMarked) "Unmark for diff" else "Mark for diff", P.text) }
+            selectableItem(
+                selected = false,
+                iconKey = AllIconsKeys.Actions.Diff,
+                // Exactly two: a diff of one has nothing to compare against, and
+                // a diff of three has no third column to put the third in.
+                enabled = onDiffMarked != null,
+                onClick = { onDiffMarked?.invoke() },
             ) {
-                Row(
-                    Modifier.fillMaxSize().padding(horizontal = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    PzText(
-                        col.label,
-                        // Match the inspector tab label: SansSerif 12sp, dim (accent when filtered).
-                        color = if (filters[col.key]?.isNotBlank() == true) P.accent else P.dim,
-                        size = 12, family = P.Ui, maxLines = 1, overflow = TextOverflow.Ellipsis, softWrap = false,
-                        // Fill the row so the funnel is pushed to the right corner.
-                        modifier = Modifier.weight(1f),
-                    )
-                    if (col.filterable) {
-                        FilterFunnel(col, filters, open = openFilter == col.key,
-                            onToggle = { openFilter = if (openFilter == col.key) null else col.key },
-                            onDismiss = { openFilter = null })
-                    }
-                }
-                // Resize handle on internal column boundaries; grows this column,
-                // shrinks the next, so the table always fills the width.
-                if (index < cols.lastIndex) {
-                    Box(
-                        Modifier.align(Alignment.CenterEnd).width(6.dp).fillMaxHeight()
-                            .pointerHoverIcon(ResizeCursor)
-                            .pointerInput(col.key) {
-                                detectHorizontalDragGestures { change, dragAmount ->
-                                    change.consume()
-                                    resize(cols, col.key, dragAmount, tableWidthPx)
-                                }
-                            },
-                    )
-                }
-            }
-        }
-    }
-}
-
-/** Moves [dragAmount] px of width from the column after [key] into it (or back). */
-private fun resize(cols: SnapshotStateList<Col>, key: String, dragAmount: Float, tableWidthPx: Float) {
-    if (tableWidthPx <= 0f) return
-    val i = cols.indexOfFirst { it.key == key }
-    val self = cols.getOrNull(i) ?: return
-    val next = cols.getOrNull(i + 1) ?: return
-    val total = cols.fold(0f) { a, c -> a + c.weight }
-    val minW = MIN_COL_PX / tableWidthPx * total
-    var d = dragAmount / tableWidthPx * total
-    if (self.weight + d < minW) d = minW - self.weight
-    if (next.weight - d < minW) d = next.weight - minW
-    self.weight += d
-    next.weight -= d
-}
-
-@Composable
-private fun FilterFunnel(
-    col: Col,
-    filters: SnapshotStateMap<String, String>,
-    open: Boolean,
-    onToggle: () -> Unit,
-    onDismiss: () -> Unit,
-) {
-    val active = filters[col.key]?.isNotBlank() == true
-    Box {
-        Box(
-            Modifier.size(15.dp)
-                .then(if (active || open) Modifier.border1(P.accent) else Modifier)
-                .background(if (active) P.accentFill else Color.Transparent)
-                .clickable { onToggle() },
-            contentAlignment = Alignment.Center,
-        ) {
-            Canvas(Modifier.size(9.dp)) {
-                val p = Path().apply {
-                    moveTo(0f, 0f); lineTo(size.width, 0f)
-                    lineTo(size.width * 0.6f, size.height * 0.5f)
-                    lineTo(size.width * 0.6f, size.height); lineTo(size.width * 0.4f, size.height)
-                    lineTo(size.width * 0.4f, size.height * 0.5f); close()
-                }
-                drawPath(p, if (active) P.accent else if (open) P.text else P.faint)
-            }
-        }
-        if (open) FilterPopup(col, filters, onDismiss)
-    }
-}
-
-@Composable
-private fun FilterPopup(col: Col, filters: SnapshotStateMap<String, String>, onDismiss: () -> Unit) {
-    Popup(
-        offset = IntOffset(-8, 18),
-        onDismissRequest = onDismiss,
-        properties = PopupProperties(focusable = true),
-    ) {
-        Column(
-            Modifier.width(if (col.presets.isNotEmpty()) 128.dp else 176.dp)
-                .background(P.chrome).border1(P.accent),
-        ) {
-            Row(
-                Modifier.fillMaxWidth().bottomBorder(P.line).padding(horizontal = 7.dp, vertical = 4.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                PzText(col.label, color = P.faint, size = 11, family = P.Ui)
-                Spacer(Modifier.weight(1f))
-                Box(Modifier.clickable { filters.remove(col.key); onDismiss() }) {
-                    PzText("CLEAR", color = P.dim, size = 11)
-                }
-            }
-            Box(Modifier.fillMaxWidth().bottomBorder(P.line).padding(horizontal = 7.dp, vertical = 5.dp)) {
-                val current = filters[col.key] ?: ""
-                BasicTextField(
-                    value = current,
-                    onValueChange = { filters[col.key] = it },
-                    singleLine = true,
-                    textStyle = TextStyle(color = P.text, fontSize = 13.sp, fontFamily = P.Mono),
-                    cursorBrush = SolidColor(P.accent),
-                    modifier = Modifier.fillMaxWidth().height(20.dp).background(P.bg).border1(P.line)
-                        .padding(horizontal = 5.dp),
-                    decorationBox = { inner ->
-                        Box(contentAlignment = Alignment.CenterStart) {
-                            if (current.isEmpty()) PzText("contains…", color = P.faint, size = 12)
-                            inner()
-                        }
-                    },
+                CellText(
+                    if (onDiffMarked != null) "Diff the 2 marked flows" else "Diff — mark 2 flows first",
+                    if (onDiffMarked != null) P.text else P.faint,
                 )
             }
-            col.presets.forEach { preset ->
-                val on = filters[col.key] == preset
-                Box(
-                    Modifier.fillMaxWidth().background(if (on) P.sel else Color.Transparent)
-                        .clickable { filters[col.key] = preset; onDismiss() }
-                        .padding(horizontal = 8.dp, vertical = 3.dp),
-                ) { PzText(preset, color = if (on) P.accent else P.dim, size = 13) }
+
+            // Plugin items, below the app's own. Built on open rather than per
+            // recomposition: a shut menu costs nothing, and an item's
+            // enablement is then read at the moment it is shown.
+            val extras = flowActions
+                .flatMap { plugin -> plugin.actionsFor(targetOf(row, bodyProvider)) }
+                // Stable across plugins: a plugin orders its own items with
+                // `order`, and equal orders keep load order, so installing one
+                // cannot reshuffle another's.
+                .sortedBy { it.order }
+            if (extras.isNotEmpty()) {
+                separator()
+                extras.forEach { action ->
+                    selectableItem(
+                        selected = false,
+                        enabled = action.enabled,
+                        onClick = { action.perform(FlowActionContext { onNotice(it) }) },
+                    ) { CellText(action.label, if (action.enabled) P.text else P.faint) }
+                }
             }
-        }
-    }
+        },
+    )
 }
 
-// ---------------------------------------------------------------------------
-// Data rows
-// ---------------------------------------------------------------------------
+/**
+ * The grid's own row, as the plugin API describes it.
+ *
+ * Headers come off the *complete* message, which arrives after the row does, so
+ * a flow still in flight yields empty lists rather than a partial set — an
+ * action reading them gets nothing rather than something misleading.
+ */
+private fun targetOf(row: TrafficRow, bodyProvider: (String, BodySide) -> ByteArray?): FlowTarget =
+    FlowTarget(
+        id = row.id,
+        method = row.request.request.method,
+        url = row.request.request.url,
+        status = row.response?.response?.status,
+        startedDateTime = row.request.startedDateTime,
+        requestHeaders = row.completeRequest?.request?.headers.orEmpty().map { FlowHeader(it.name, it.value) },
+        responseHeaders = row.completeResponse?.response?.headers.orEmpty().map { FlowHeader(it.name, it.value) },
+        body = { side ->
+            bodyProvider(
+                row.id,
+                when (side) {
+                    FlowBodySide.REQUEST -> BodySide.REQUEST
+                    FlowBodySide.RESPONSE -> BodySide.RESPONSE
+                },
+            )
+        },
+    )
 
-@Composable
-private fun DataRow(cols: List<Col>, row: TrafficRow, selected: Boolean, onSelect: (String) -> Unit) {
-    Row(
-        Modifier.fillMaxWidth().height(22.dp)
-            .background(if (selected) P.sel else Color.Transparent)
-            .then(if (selected) Modifier.leftBorder(P.accent, 2.dp) else Modifier)
-            .bottomBorder(P.line2)
-            .clickable { onSelect(row.id) },
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        cols.forEachIndexed { index, col ->
-            Row(
-                Modifier.weight(col.weight).fillMaxHeight()
-                    .then(if (index < cols.lastIndex) Modifier.rightBorder(P.line2) else Modifier)
-                    .padding(horizontal = 8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = if (col.end) Arrangement.End else Arrangement.Start,
-            ) { col.cell(row) }
-        }
-    }
+/** Copies [text], and reports the one case worth telling anyone about. */
+private fun copyOrReport(text: String, what: String, onNotice: (String) -> Unit) {
+    if (!copyToClipboard(text)) onNotice("Could not copy the $what to the clipboard.")
 }
-
-@Composable
-private fun CText(text: String, color: Color) =
-    PzText(text, color = color, size = 13, maxLines = 1, overflow = TextOverflow.Ellipsis, softWrap = false)

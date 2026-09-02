@@ -8,11 +8,18 @@ data class ThemeSpec(
     val id: String,
     /** Human-readable name shown in the appearance picker. */
     val name: String,
-    /** Whether this is a dark theme (for grouping/UX hints). */
-    val dark: Boolean,
     /** The colours applied when this theme is active. */
     val palette: Palette,
-)
+) {
+    /**
+     * Whether this is a dark theme.
+     *
+     * Read off the palette rather than declared, so a spec cannot disagree with
+     * the colours it ships. It decides which Int UI base the host styles Jewel
+     * from, so getting it wrong would be visible rather than cosmetic.
+     */
+    val dark: Boolean get() = palette.isDark
+}
 
 /**
  * The first plugin category: contributes one or more selectable themes. The host

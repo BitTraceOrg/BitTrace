@@ -3,15 +3,15 @@ package org.bittrace.data
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import java.nio.file.Files
+import java.nio.file.Path
+import java.nio.file.Paths
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
-import java.nio.file.Files
-import java.nio.file.Path
-import java.nio.file.Paths
 
 /**
  * A persistent, JSON-backed settings store.

@@ -16,9 +16,6 @@ interface Plugin {
     /** Human-readable name shown in the host UI. */
     val name: String
 
-    /** Plugin version string; informational for now. */
-    val version: String get() = "1.0.0"
-
     /** Called once after discovery, before the plugin's capabilities are used. */
     fun init(host: PluginHost) {}
 }

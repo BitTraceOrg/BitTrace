@@ -3,3 +3,11 @@ org.bittrace.plugin.builtin.PrecisionThemePlugin
 org.bittrace.plugin.builtin.RawFormatter
 org.bittrace.plugin.builtin.HexFormatter
 org.bittrace.plugin.builtin.JsonFormatter
+org.bittrace.plugin.builtin.XmlFormatter
+org.bittrace.plugin.builtin.HtmlFormatter
+org.bittrace.plugin.builtin.JsFormatter
+org.bittrace.plugin.builtin.TsFormatter
+org.bittrace.plugin.builtin.GraphQlFormatter
+org.bittrace.plugin.builtin.CurlImporter
+org.bittrace.plugin.builtin.BundledCollectionActions
+org.bittrace.plugin.builtin.BundledFlowActions

@@ -1,18 +1,29 @@
 package org.bittrace.components
 
 import androidx.compose.ui.graphics.Color
-import org.bittrace.data.TrafficRow
-import org.bittrace.ui.P
 import java.time.Instant
 import java.time.LocalDateTime
 import java.time.OffsetDateTime
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
+import org.bittrace.data.TrafficRow
+import org.bittrace.ui.P
 
 /** Row-to-cell formatting shared by the flow table and the waterfall. */
 
 private val CLOCK: DateTimeFormatter =
     DateTimeFormatter.ofPattern("HH:mm:ss.SSS").withZone(ZoneId.systemDefault())
+
+/** Coarser, and dated: a history entry can be days old, a flow never is. */
+private val DAY_CLOCK: DateTimeFormatter =
+    DateTimeFormatter.ofPattern("MMM d HH:mm").withZone(ZoneId.systemDefault())
+
+/** Wall-clock time of an epoch-millis instant, to the millisecond. */
+fun clockOf(millis: Long): String = CLOCK.format(Instant.ofEpochMilli(millis))
+
+/** Date and time of an epoch-millis instant; blank for a missing timestamp. */
+fun dayClockOf(millis: Long): String =
+    if (millis <= 0) "" else DAY_CLOCK.format(Instant.ofEpochMilli(millis))
 
 fun instantOf(value: String): Instant? =
     runCatching { OffsetDateTime.parse(value).toInstant() }
@@ -29,15 +40,60 @@ fun hostPath(url: String): Pair<String, String> {
 
 fun kindOf(url: String): String {
     val path = hostPath(url).second.substringBefore('?').lowercase()
-    return when {
-        path.endsWith(".css") -> "css"
-        path.endsWith(".js") -> "js"
-        path.endsWith(".ico") || path.endsWith(".png") || path.endsWith(".jpg") ||
-            path.endsWith(".gif") || path.endsWith(".svg") || path.endsWith(".webp") -> "img"
-        path.endsWith(".txt") -> "text"
-        else -> "html"
-    }
+    val extension = path.substringAfterLast('.', "")
+    return EXTENSION_KINDS[extension] ?: "html"
 }
+
+/**
+ * A row's kind, preferring what the response said it was.
+ *
+ * An extension is a guess and a `Content-Type` is an answer: `/api/v2/users`
+ * has no extension at all and is nearly always JSON, while `/download?f=x.png`
+ * may be anything. The URL stays the fallback, for a request still in flight or
+ * a response that never said.
+ */
+fun kindOfRow(row: TrafficRow): String {
+    val declared = row.completeResponse?.response?.headers
+        ?.firstOrNull { it.name.equals("content-type", ignoreCase = true) }
+        ?.value
+        ?.substringBefore(';')
+        ?.trim()
+        ?.lowercase()
+        .orEmpty()
+    return kindOfType(declared) ?: kindOf(row.request.request.url)
+}
+
+/** The bucket a MIME type falls in, or null when it names none of them. */
+fun kindOfType(mime: String): String? = when {
+    mime.isBlank() -> null
+    mime.contains("html") -> "html"
+    mime.contains("css") -> "css"
+    mime.contains("javascript") || mime.contains("ecmascript") -> "js"
+    mime.contains("json") -> "json"
+    mime.contains("xml") -> "xml"
+    mime.startsWith("image/") -> "img"
+    mime.startsWith("font/") || mime.contains("woff") || mime.contains("ttf") -> "font"
+    mime.startsWith("audio/") || mime.startsWith("video/") -> "media"
+    mime.startsWith("text/") -> "text"
+    mime.startsWith("application/") -> "bin"
+    else -> null
+}
+
+/** Extensions worth recognising, for when nothing declared a type. */
+private val EXTENSION_KINDS = mapOf(
+    "css" to "css",
+    "js" to "js", "mjs" to "js", "cjs" to "js",
+    "json" to "json", "map" to "json",
+    "xml" to "xml", "xsl" to "xml", "rss" to "xml", "atom" to "xml",
+    "ico" to "img", "png" to "img", "jpg" to "img", "jpeg" to "img",
+    "gif" to "img", "svg" to "img", "webp" to "img", "avif" to "img", "bmp" to "img",
+    "woff" to "font", "woff2" to "font", "ttf" to "font", "otf" to "font", "eot" to "font",
+    "mp3" to "media", "mp4" to "media", "webm" to "media", "ogg" to "media",
+    "wav" to "media", "mov" to "media", "m3u8" to "media", "ts" to "media",
+    "txt" to "text", "csv" to "text", "md" to "text",
+    "wasm" to "bin", "zip" to "bin", "gz" to "bin", "pdf" to "bin", "bin" to "bin",
+    "html" to "html", "htm" to "html",
+)
 
 fun tlsText(row: TrafficRow): String {
     val tls = row.request.tls

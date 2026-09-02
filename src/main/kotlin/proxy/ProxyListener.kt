@@ -19,7 +19,7 @@ data class LogEntry(
 
 /**
  * Callbacks for everything the sidecar reports. These fire on the reader
- * threads, not the JavaFX thread — [org.bittrace.data.TrafficStore] already
+ * threads, not the JavaFX thread — [org.bittrace.data.SessionStore] already
  * marshals what it receives, anything else you do here must marshal itself.
  *
  * Replaces the Tauri `app.emit(...)` events one-for-one:

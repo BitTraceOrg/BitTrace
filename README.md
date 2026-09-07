@@ -7,6 +7,10 @@ other traffic.
 
 ![The capture screen](docs/capture.png)
 
+Every row above is real: `CONNECT` tunnels sitting beside the requests that
+travel inside them, TLS versions, content kinds, and where each millisecond
+went.
+
 ## What it does
 
 ### Capture
@@ -29,9 +33,9 @@ other traffic.
   captured flows, imported HAR entries and API client responses.
 - **A waterfall and phase timeline** for where a request actually spent its
   time.
-- **CONNECT tunnels as first-class flows.** mitmproxy answers CONNECT without
-  raising the ordinary hooks, so a tunnel — and any refusal to open one — would
-  otherwise leave no trace at all.
+- **`CONNECT` tunnels as first-class flows.** mitmproxy answers `CONNECT`
+  without raising the ordinary hooks, so a tunnel — and any refusal to open one
+  — would otherwise leave no trace at all.
 - **Streamed bodies.** Anything past the sidecar's threshold arrives chunk by
   chunk and is reassembled before it reaches the cache, still
   `Content-Encoding`-encoded from the wire, so it is inflated on the way in.
@@ -61,6 +65,29 @@ other traffic.
   collection as a zip.
 - **Send history**, per-request settings, and an unsaved-changes guard that
   stops a checkout overwriting work in progress.
+
+### Home
+
+![The home dashboard](docs/home.png)
+
+Proxy status, session counters, and a thirty-day activity heatmap. It also
+greets you, and it does not take itself seriously about it — one of ten lines,
+picked at random and held for as long as you stay on the screen:
+
+> Don't panic, **and always know where your towel is.**
+> May the packets be with you, **always.**
+> Live long and **inspect traffic.**
+> It's dangerous to go alone, **take this proxy.**
+> You are the one, **Neo of the network.**
+> Winter is coming, **so is the timeout.**
+> One does not simply **walk into production.**
+> Roads? Where we're going **we need no roads.**
+> So say we all, **and so say the sockets.**
+> Welcome back, **traveler.**
+
+They live in `Greetings` in
+[`ui/layouts/home/Home.kt`](src/main/kotlin/ui/layouts/home/Home.kt). Adding one
+is a one-line pull request, and the bar for entry is low.
 
 ### Plugins
 

@@ -2,6 +2,7 @@ package org.bittrace.proxy
 
 import org.bittrace.data.CompleteRequestMessage
 import org.bittrace.data.CompleteResponseMessage
+import org.bittrace.data.ConnectRequestData
 import org.bittrace.data.InitialRequestData
 import org.bittrace.data.InitialResponseData
 import org.bittrace.data.SessionStore
@@ -23,6 +24,9 @@ class ProxyService(
 ) {
 
     private var process: ProxyProcess? = null
+
+    /** Rebuilds bodies that arrive as chunks; see [StreamedBodies]. */
+    private val streamed = StreamedBodies(onLog = { onLog(it) })
 
     val isRunning: Boolean get() = process?.isRunning == true
 
@@ -47,6 +51,7 @@ class ProxyService(
     fun clear() {
         store.clear()
         bodies.clear()
+        streamed.clear()
     }
 
     /** Raw body for a flow, or null once it has been evicted from the cache. */
@@ -68,8 +73,28 @@ class ProxyService(
         }
 
         override fun onCompleteResponse(message: CompleteResponseMessage, body: ByteArray) {
+            // A streamed body arrives empty here, having already been assembled
+            // from its chunks and cached — so the emptiness check is not just an
+            // optimisation, it is what keeps that body from being overwritten.
             if (body.isNotEmpty()) bodies.put(message.id, BodySide.RESPONSE, body)
             store.onCompleteResponse(message)
+        }
+
+        override fun onConnectRequest(data: ConnectRequestData) =
+            store.onConnectRequest(data)
+
+        override fun onConnectResponse(data: InitialResponseData) =
+            store.onInitialResponse(data)
+
+        override fun onBodyChunk(message: BodyChunkMessage, body: ByteArray) =
+            streamed.chunk(message, body)
+
+        override fun onBodyEnd(message: BodyEndMessage) {
+            // Closed first, unconditionally: an unrecognised side would
+            // otherwise leave the assembled bytes pending forever.
+            val body = streamed.end(message)
+            val side = BodySide.fromString(message.side)
+            if (body != null && side != null) bodies.put(message.id, side, body)
         }
 
         override fun onStderr(line: String) =

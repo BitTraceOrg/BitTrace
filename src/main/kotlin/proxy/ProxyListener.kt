@@ -3,6 +3,7 @@ package org.bittrace.proxy
 import kotlinx.serialization.Serializable
 import org.bittrace.data.CompleteRequestMessage
 import org.bittrace.data.CompleteResponseMessage
+import org.bittrace.data.ConnectRequestData
 import org.bittrace.data.InitialRequestData
 import org.bittrace.data.InitialResponseData
 
@@ -30,6 +31,22 @@ interface ProxyListener {
     fun onLog(entry: LogEntry) {}
     fun onInitialRequest(data: InitialRequestData) {}
     fun onInitialResponse(data: InitialResponseData) {}
+
+    /** A client asked the proxy to open a tunnel. Its own flow, with its own id. */
+    fun onConnectRequest(data: ConnectRequestData) {}
+
+    /**
+     * The tunnel was opened, or refused. The frame carries the same fields as
+     * an ordinary initial response — status 200 on success, 0 with the reason
+     * in `statusText` on failure — and shares the [onConnectRequest] flow id.
+     */
+    fun onConnectResponse(data: InitialResponseData) {}
+
+    /** One chunk of a body large enough to be streamed; [body] is the chunk. */
+    fun onBodyChunk(message: BodyChunkMessage, body: ByteArray) {}
+
+    /** A streamed body ended; the totals say whether all of it arrived. */
+    fun onBodyEnd(message: BodyEndMessage) {}
 
     /** [body] is the raw request body that travelled alongside the metadata. */
     fun onCompleteRequest(message: CompleteRequestMessage, body: ByteArray) {}

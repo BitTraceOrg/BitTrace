@@ -13,6 +13,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.bittrace.data.CompleteRequestMessage
 import org.bittrace.data.CompleteResponseMessage
+import org.bittrace.data.ConnectRequestData
 import org.bittrace.data.InitialRequestData
 import org.bittrace.data.InitialResponseData
 
@@ -185,6 +186,25 @@ class ProxyProcess(
             Tags.COMPLETE_RESPONSE ->
                 decode<CompleteResponseMessage>("proxy-complete-response", frame.json)
                     ?.let { listener.onCompleteResponse(it, frame.body) }
+
+            Tags.CONNECT_REQUEST ->
+                decode<ConnectRequestData>("proxy-connect-request", frame.json)
+                    ?.let(listener::onConnectRequest)
+
+            // A CONNECT response carries the initial-response field set plus a
+            // clientConnectionId the flow id already covers, so it decodes as
+            // one rather than earning a near-duplicate type.
+            Tags.CONNECT_RESPONSE ->
+                decode<InitialResponseData>("proxy-connect-response", frame.json)
+                    ?.let(listener::onConnectResponse)
+
+            Tags.BODY_CHUNK ->
+                decode<BodyChunkMessage>("proxy-body-chunk", frame.json)
+                    ?.let { listener.onBodyChunk(it, frame.body) }
+
+            Tags.BODY_END ->
+                decode<BodyEndMessage>("proxy-body-end", frame.json)
+                    ?.let(listener::onBodyEnd)
 
             else -> logError("unknown frame tag: ${frame.tag}")
         }

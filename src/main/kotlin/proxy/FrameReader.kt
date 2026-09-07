@@ -16,6 +16,16 @@ object Tags {
     const val INITIAL_RESPONSE = 3
     const val COMPLETE_REQUEST = 4
     const val COMPLETE_RESPONSE = 5
+
+    /** CONNECT tunnel setup. Its own flow, linked by `clientConnectionId`. */
+    const val CONNECT_REQUEST = 6
+    const val CONNECT_RESPONSE = 7
+
+    /** One chunk of a body too large to ride inline on a `COMPLETE_*` frame. */
+    const val BODY_CHUNK = 8
+
+    /** End of a streamed body, with its totals and content encoding. */
+    const val BODY_END = 9
 }
 
 /**

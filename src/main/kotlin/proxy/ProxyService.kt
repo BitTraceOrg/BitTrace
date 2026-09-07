@@ -36,9 +36,20 @@ class ProxyService(
     /** Seconds since the sidecar reported its PID. */
     val uptimeSeconds: Long? get() = process?.uptimeSeconds
 
-    /** Starts the sidecar on [port]. Throws if it is already running or missing. */
+    /**
+     * Starts the sidecar on [port]. Throws if it is already running or missing.
+     *
+     * Sweeps orphaned sidecars first, because the port one of them is holding
+     * is the port this is about to want — see [ProxyProcess.killOrphans] for
+     * what counts as orphaned, which is narrower than "any MITMConnect".
+     *
+     * On every start, not only the first: a start can fail with the port taken
+     * and be retried from the Proxy menu, and having to relaunch the app to get
+     * the sweep would defeat it.
+     */
     fun start(port: Int) {
         check(!isRunning) { "proxy already running" }
+        ProxyProcess.killOrphans(onLog)
         ProxyProcess(port.toString(), listener).also {
             process = it
             it.start()

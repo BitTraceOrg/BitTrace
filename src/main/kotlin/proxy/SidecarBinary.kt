@@ -93,6 +93,34 @@ object SidecarBinary {
     private fun cacheDirectory(bytes: ByteArray): Path {
         val digest = MessageDigest.getInstance("SHA-256").digest(bytes)
         val id = digest.take(8).joinToString("") { "%02x".format(it) }
-        return Path.of(System.getProperty("java.io.tmpdir"), "bittrace-sidecar-$id")
+        return Path.of(System.getProperty("java.io.tmpdir"), "$CACHE_PREFIX$id")
+    }
+
+    /** Names the extraction directory, and identifies one afterwards. */
+    private const val CACHE_PREFIX = "bittrace-sidecar-"
+
+    /**
+     * Whether [command] is a sidecar this application extracted.
+     *
+     * Deliberately not "is it called MITMConnect": someone may have a build of
+     * their own open, and a name match alone would make it ours to kill. What
+     * makes it ours is the directory — either an extraction folder, whose name
+     * this object chose, or the one a dev run was pointed at explicitly.
+     *
+     * The hash in an extraction folder is not checked, so a sidecar left behind
+     * by an *older build* still counts. That is the point: it is holding the
+     * listen port just as surely as a current one, and the version it was built
+     * from makes no difference to that.
+     */
+    fun isExtractedSidecar(command: String?): Boolean {
+        val path = command?.let { runCatching { Path.of(it) }.getOrNull() } ?: return false
+        if (!path.fileName?.toString().equals(filename, ignoreCase = true)) return false
+        val parent = path.parent ?: return false
+
+        System.getProperty("bittrace.sidecar.dir")?.let { override ->
+            val dir = runCatching { Path.of(override).toAbsolutePath().normalize() }.getOrNull()
+            if (dir != null && dir == parent.toAbsolutePath().normalize()) return true
+        }
+        return parent.fileName?.toString()?.startsWith(CACHE_PREFIX) == true
     }
 }

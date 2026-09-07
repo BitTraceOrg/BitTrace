@@ -260,7 +260,101 @@ class ProxyProcess(
         }, name).apply { isDaemon = true }.start()
     }
 
-    private companion object {
-        fun nullFile(): File = File(if (SidecarBinary.isWindows) "NUL" else "/dev/null")
+    companion object {
+        private fun nullFile(): File = File(if (SidecarBinary.isWindows) "NUL" else "/dev/null")
+
+        /** How long a killed orphan is given to actually go away. */
+        private const val REAP_MILLIS = 2_000L
+
+        /**
+         * Kills sidecars that outlived whatever launched them.
+         *
+         * A sidecar is not always reaped with its launcher: kill BitTrace from
+         * a task manager, or have it die badly, and MITMConnect keeps running
+         * and keeps the listen port. The next launch then cannot bind, and
+         * because the orphan is still proxying the symptom is not an error but
+         * something worse — the app comes up looking healthy, reports no PID
+         * and captures nothing, while traffic still flows through a process no
+         * window is attached to.
+         *
+         * **Orphaned means the parent is gone, not "not ours".** A sidecar
+         * whose parent is alive belongs to a running BitTrace, possibly a
+         * second window opened on purpose, and killing that would turn this
+         * from a fix into a bug. The one exception is a parent that is *this*
+         * JVM: that is our own leftover from a start that failed partway, and
+         * nothing else will clean it up.
+         *
+         * Two things lean deliberately towards doing nothing. A process whose
+         * command cannot be read — another user's, typically — is left alone
+         * rather than guessed at. And a parent PID recycled onto an unrelated
+         * live process makes its child look owned, so it survives; of the two
+         * ways to be wrong, leaving a stray process is the recoverable one.
+         *
+         * @return how many were killed
+         */
+        fun killOrphans(onLog: (LogEntry) -> Unit): Int {
+            val self = ProcessHandle.current()
+            val sidecars = ProcessHandle.allProcesses()
+                .filter { it.pid() != self.pid() && it.isAlive }
+                .filter { SidecarBinary.isExtractedSidecar(it.info().command().orElse(null)) }
+                .toList()
+            if (sidecars.isEmpty()) return 0
+
+            val byPid = sidecars.associateBy { it.pid() }
+            val verdicts = HashMap<Long, Boolean>()
+
+            // Ownership is inherited, so it has to be followed up the tree.
+            // The sidecar re-execs itself: a launcher, and under it the process
+            // that actually holds the listen port. Judging each one only by its
+            // immediate parent gets the port-holder wrong every time — its
+            // parent is the launcher, which is still alive at the moment the
+            // scan runs even when the app that started them both is long gone.
+            // A sidecar is owned only if the chain above it reaches something
+            // alive that is not itself a sidecar being swept.
+            fun orphaned(handle: ProcessHandle, seen: MutableSet<Long>): Boolean {
+                verdicts[handle.pid()]?.let { return it }
+                // A cycle cannot reach a live owner, and cannot be trusted to
+                // terminate either.
+                if (!seen.add(handle.pid())) return true
+                val parent = handle.parent().orElse(null)
+                val result = when {
+                    parent == null || !parent.isAlive -> true
+                    // Our own leftover from a start that failed partway.
+                    parent.pid() == self.pid() -> true
+                    else -> byPid[parent.pid()]?.let { orphaned(it, seen) } ?: false
+                }
+                verdicts[handle.pid()] = result
+                return result
+            }
+
+            val orphans = sidecars.filter { orphaned(it, mutableSetOf()) }
+            val orphanPids = orphans.map { it.pid() }.toSet()
+            // Children before the launchers that spawned them, so a launcher
+            // cannot notice its child die and start a replacement.
+            val ordered = orphans.sortedByDescending {
+                it.parent().orElse(null)?.pid() in orphanPids
+            }
+
+            var killed = 0
+            for (orphan in ordered) {
+                val pid = orphan.pid()
+                if (!orphan.destroyForcibly()) {
+                    onLog(LogEntry("error", "proxy", "could not kill orphaned sidecar pid $pid"))
+                    continue
+                }
+                // Waited on rather than fired and forgotten: the port is not
+                // free until the process is, and binding it is the caller's
+                // very next move.
+                runCatching { orphan.onExit().get(REAP_MILLIS, TimeUnit.MILLISECONDS) }
+                    .onSuccess {
+                        killed++
+                        onLog(LogEntry("info", "proxy", "killed orphaned sidecar pid $pid"))
+                    }
+                    .onFailure {
+                        onLog(LogEntry("error", "proxy", "orphaned sidecar pid $pid did not exit"))
+                    }
+            }
+            return killed
+        }
     }
 }

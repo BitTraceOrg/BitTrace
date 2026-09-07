@@ -130,9 +130,34 @@ class SessionStore(
 
     fun onInitialRequest(data: InitialRequestData): Unit = onUi {
         if (byId.containsKey(data.id)) return@onUi
-        onLiveFlow(data.startedDateTime)
-        val row = TrafficRow(nextRowCount++, data, LIVE_SESSION)
-        byId[data.id] = row
+        add(TrafficRow(nextRowCount++, data, LIVE_SESSION))
+    }
+
+    /**
+     * Adds the CONNECT that opened a tunnel as a row of its own.
+     *
+     * It is a flow like any other once it is here — the frame carries the same
+     * HAR request head, and its response arrives through [onInitialResponse]
+     * under the same id. Its headers come with it rather than on a later frame,
+     * so the row is complete on the request side the moment it lands.
+     */
+    fun onConnectRequest(data: ConnectRequestData): Unit = onUi {
+        if (byId.containsKey(data.id)) return@onUi
+        add(
+            TrafficRow(
+                nextRowCount++,
+                data.toInitialRequest(),
+                LIVE_SESSION,
+                isConnect = true,
+                clientAddress = data.clientAddress,
+            ).apply { completeRequest = data.toCompleteRequest() }
+        )
+    }
+
+    /** Registers a fresh live row and places it. Call on the UI thread. */
+    private fun add(row: TrafficRow) {
+        onLiveFlow(row.request.startedDateTime)
+        byId[row.id] = row
         // Mid-import, hold the row back so the imported run stays contiguous —
         // but never drop it, and never delay its byId registration.
         if (importing != null && deferred.size < MAX_DEFERRED) deferred.add(row) else backing.add(row)

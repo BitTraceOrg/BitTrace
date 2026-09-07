@@ -58,6 +58,12 @@ data class InitialRequestData(
     val startedDateTime: String,
     val request: RequestHead,
     @SerialName("_tls") val tls: String,
+    /**
+     * mitmproxy's client connection id, shared with the CONNECT that opened
+     * this request's tunnel (see [ConnectRequestData]). Blank on a flow that
+     * predates the field, or one that never went through a tunnel.
+     */
+    val clientConnectionId: String = "",
 ) {
     @Serializable
     data class RequestHead(
@@ -104,6 +110,12 @@ data class InitialResponseData(
 data class CompleteRequestMessage(
     val id: String,
     val request: RequestBody,
+    /**
+     * The body was too large to ride inline and arrived as `BodyChunk` frames
+     * instead; this frame's body segment is empty. See
+     * [org.bittrace.proxy.StreamedBodies].
+     */
+    @SerialName("_bodyStreamed") val bodyStreamed: Boolean = false,
 ) {
     @Serializable
     data class RequestBody(
@@ -126,6 +138,12 @@ data class CompleteResponseMessage(
     val response: ResponseBody,
     val timings: Timings,
     val time: Double,
+    /**
+     * The body was streamed as `BodyChunk` frames rather than carried here, so
+     * the frame's body segment is empty and `content.size` is the *compressed*
+     * wire length. See [org.bittrace.proxy.StreamedBodies].
+     */
+    @SerialName("_bodyStreamed") val bodyStreamed: Boolean = false,
 ) {
     @Serializable
     data class ResponseBody(
@@ -136,4 +154,72 @@ data class CompleteResponseMessage(
 
     @Serializable
     data class Timings(val receive: Double)
+}
+
+// ---------------------------------------------------------------------------
+// CONNECT  (tunnel setup — its own pair of frames)
+// ---------------------------------------------------------------------------
+
+/**
+ * Emitted on `http_connect`, when a client asks the proxy to open a tunnel.
+ *
+ * mitmproxy answers CONNECT itself without raising the ordinary request and
+ * response hooks, so a tunnel — and any failure to open one — would otherwise
+ * be invisible. A CONNECT flow has its own [id], unrelated to the ids of the
+ * requests that later travel inside it; [clientConnectionId] is the only link
+ * back, and it also appears on [InitialRequestData].
+ *
+ * The payload is an ordinary HAR request head with two additions ([headers]
+ * arrive here rather than on a later frame, since a CONNECT has no body to
+ * wait for), so it converts into the pair of messages the store already merges
+ * into a row — see [toInitialRequest] and [toCompleteRequest]. The matching
+ * `ConnectResponse` frame carries exactly the [InitialResponseData] field set
+ * and is decoded as one.
+ */
+@Serializable
+data class ConnectRequestData(
+    val id: String,
+    val clientConnectionId: String = "",
+    val startedDateTime: String,
+    /** `host:port` of the client that asked for the tunnel. */
+    val clientAddress: String = "",
+    val request: ConnectHead,
+    @SerialName("_tls") val tls: String = "",
+) {
+    @Serializable
+    data class ConnectHead(
+        val method: String,
+        /** The authority (`host:port`) the tunnel is for — CONNECT has no path. */
+        val url: String,
+        val httpVersion: String,
+        val headersSize: Long,
+        val bodySize: Long,
+        val queryString: List<NameValuePair> = emptyList(),
+        val headers: List<NameValuePair> = emptyList(),
+    )
+
+    fun toInitialRequest(): InitialRequestData = InitialRequestData(
+        id = id,
+        startedDateTime = startedDateTime,
+        request = InitialRequestData.RequestHead(
+            method = request.method,
+            url = request.url,
+            httpVersion = request.httpVersion,
+            headersSize = request.headersSize,
+            bodySize = request.bodySize,
+            queryString = request.queryString,
+        ),
+        tls = tls,
+        clientConnectionId = clientConnectionId,
+    )
+
+    /**
+     * The headers as the "complete" half of the flow. There is no second
+     * request frame for a CONNECT, so without this the inspector would show a
+     * tunnel as a row with no headers at all.
+     */
+    fun toCompleteRequest(): CompleteRequestMessage = CompleteRequestMessage(
+        id = id,
+        request = CompleteRequestMessage.RequestBody(headers = request.headers),
+    )
 }

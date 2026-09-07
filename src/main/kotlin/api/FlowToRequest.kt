@@ -56,11 +56,18 @@ fun cookiesOf(header: String): List<KeyValue> =
         if (name.isEmpty()) null else KeyValue(name, pair.substringAfter('=', "").trim())
     }
 
-/** A short, file-name-safe label like `GET users`. */
-private fun nameFor(method: String, url: String): String {
+/**
+ * A short, file-name-safe label like `GET users`.
+ *
+ * Shared with the cURL importer, which is where the `uppercase` comes from: a
+ * method off the wire already arrives upper-cased, one out of a pasted command
+ * may not.
+ */
+internal fun nameFor(method: String, url: String): String {
     val path = url.substringAfter("://", url).substringAfter('/', "").substringBefore('?')
     val leaf = path.trimEnd('/').substringAfterLast('/').ifBlank { "root" }
-    return fileNameFor("$method $leaf") ?: method
+    val label = method.uppercase()
+    return fileNameFor("$label $leaf") ?: label
 }
 
 private fun decodeOrEmpty(bytes: ByteArray): String {

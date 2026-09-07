@@ -13,6 +13,21 @@ import com.charleskorn.kaml.YamlConfiguration
  * lines that read as `---`, and chomping indicators. Getting any of those wrong
  * silently corrupts someone's request body.
  */
+/**
+ * The plain YAML configuration, shared by every store that writes one.
+ *
+ * `encodeDefaults` so a file always shows every field — one that omits what it
+ * left at the default is a file you cannot diff. `strictMode = false` so a file
+ * from a later build loads rather than throwing, the same bargain
+ * `SettingsStore` makes with `ignoreUnknownKeys`.
+ *
+ * Requests keep their own instance below: only a body needs literal block
+ * scalars, and that option is what makes one readable in a diff.
+ */
+val appYaml = Yaml(
+    configuration = YamlConfiguration(encodeDefaults = true, strictMode = false),
+)
+
 object RequestYaml {
 
     private val yaml = Yaml(

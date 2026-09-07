@@ -1,5 +1,6 @@
 package org.bittrace.api
 
+import org.bittrace.ui.components.editor.graphql
 import org.bittrace.data.Settings
 import kotlin.test.Test
 import kotlin.test.assertEquals

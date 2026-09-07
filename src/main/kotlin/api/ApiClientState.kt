@@ -32,6 +32,7 @@ import org.bittrace.data.SessionStore
 import org.bittrace.data.TrafficStrings
 import org.bittrace.proxy.BodySide
 import org.bittrace.proxy.ProxyService
+import kotlin.time.Duration.Companion.milliseconds
 
 /**
  * The AWT event thread — which is also Compose Desktop's UI thread.
@@ -53,10 +54,41 @@ object EdtDispatcher : CoroutineDispatcher() {
  * Everything that differs between tabs lives here, so switching tabs cannot
  * leak a response or an in-flight send from one request into another.
  */
-class RequestTab(val id: Long, request: ApiRequest, path: java.nio.file.Path?) {
+/**
+ * Something open in the main pane.
+ *
+ * A sum rather than a request with a mode flag on it. The alternative — one
+ * class carrying a placeholder `ApiRequest` for the non-request case — compiles
+ * everywhere and is wrong at runtime in a dozen places, the worst of which is
+ * `CollectionStore.save(openPath, request)`: with a placeholder that call is
+ * writable, and it would put a six-line YAML file where a project folder was.
+ * Split like this, the call cannot be written at all.
+ */
+sealed interface EditorTab {
+    val id: Long
+    val title: String
+    var dirty: Boolean
+}
+
+/** A project's variables, open for editing. */
+class VariablesTab(
+    override val id: Long,
+    val project: java.nio.file.Path,
+    rows: List<KeyValue>,
+) : EditorTab {
+    var rows by mutableStateOf(rows)
+    override var dirty by mutableStateOf(false)
+    override val title: String get() = "Variables"
+}
+
+class RequestTab(
+    override val id: Long,
+    request: ApiRequest,
+    path: java.nio.file.Path?,
+) : EditorTab {
     var request by mutableStateOf(request)
     var openPath by mutableStateOf(path)
-    var dirty by mutableStateOf(false)
+    override var dirty by mutableStateOf(false)
 
     /** The flow id whose response is on show — captured or synthesized alike. */
     var resultId by mutableStateOf<String?>(null)
@@ -67,7 +99,17 @@ class RequestTab(val id: Long, request: ApiRequest, path: java.nio.file.Path?) {
     val busy: Boolean get() = inFlight != null
 
     /** What the tab strip shows; falls back to the method when unnamed. */
-    val title: String get() = request.name.ifBlank { request.method }
+    override val title: String get() = request.name.ifBlank { request.method }
+}
+
+/** What a checkout or pull did to the open tabs. */
+class ReconcileReport(val reloaded: Int, val orphaned: Int, val failed: Int) {
+    /** The half-sentence that follows "Switched to main". */
+    fun summary(): String = buildList {
+        if (reloaded > 0) add("$reloaded reloaded")
+        if (orphaned > 0) add("$orphaned no longer here")
+        if (failed > 0) add("$failed could not be read")
+    }.joinToString(", ")
 }
 
 /**
@@ -87,6 +129,15 @@ class ApiClientState(
      * changing one in Settings should reach the next send, not the next restart.
      */
     private val defaults: () -> org.bittrace.data.Settings,
+    /**
+     * A project's `{{name}}` values, by the file the request was opened from.
+     *
+     * A lambda for the same reason the port and the defaults are: it is read per
+     * send, so editing a variable reaches the next send rather than the next
+     * restart. It also keeps this class free of `CollectionStore`, which is the
+     * rule the rest of the file follows.
+     */
+    private val variablesFor: (java.nio.file.Path?) -> Map<String, String> = { emptyMap() },
     /** Records every send, so the history tab has something to show. */
     private val history: HistoryStore,
     private val onLog: (String, String) -> Unit = { _, _ -> },
@@ -100,6 +151,24 @@ class ApiClientState(
      */
     val tokens = OAuthTokens()
 
+    /**
+     * Where an unsaved draft counts as living, for variables.
+     *
+     * A draft has no file, so it used to belong to no project and every
+     * `{{name}}` in it resolved to nothing — silently, because that is what an
+     * unknown name does. But a draft is not homeless: `save` already puts it in
+     * whatever the Forge tree has selected, so that is the project it will
+     * belong to, and resolving against a different one than it will be saved
+     * into is the difference a user cannot see and cannot explain.
+     *
+     * The Forge keeps this in step with its selection. Null when nothing is
+     * selected, which is the one case where a draft really has no project.
+     */
+    var draftHome by mutableStateOf<java.nio.file.Path?>(null)
+
+    /** The path whose project supplies [tab]'s values: its own file, or the draft's home. */
+    private fun homeOf(tab: RequestTab?): java.nio.file.Path? = tab?.openPath ?: draftHome
+
     /** The authorisation in flight, so it can be stopped. Snapshot-backed for the button. */
     private var authJob by mutableStateOf<Job?>(null)
 
@@ -109,27 +178,116 @@ class ApiClientState(
     private var nextTabId = 1L
 
     /** Open requests, in tab order. Never empty: closing the last opens a blank one. */
-    val tabs = mutableStateListOf(RequestTab(nextTabId++, ApiRequest(), null))
+    val tabs = mutableStateListOf<EditorTab>(RequestTab(nextTabId++, ApiRequest(), null))
 
     var activeId by mutableStateOf(tabs.first().id)
         private set
 
     /** The tab being edited. Null only in the instant between mutations. */
-    val active: RequestTab? get() = tabs.firstOrNull { it.id == activeId }
+    val active: EditorTab? get() = tabs.firstOrNull { it.id == activeId }
+
+    /**
+     * The active tab, when it is a request.
+     *
+     * Everything below that speaks in requests goes through this, so opening the
+     * variables table makes `send`, `edit` and `markSaved` no-ops rather than
+     * operations on something that is not a request.
+     */
+    val activeRequest: RequestTab? get() = active as? RequestTab
 
     // Convenience accessors, so the view reads the active tab without reaching
     // through it on every line.
-    val request: ApiRequest get() = active?.request ?: ApiRequest()
-    val openPath: java.nio.file.Path? get() = active?.openPath
+    val request: ApiRequest get() = activeRequest?.request ?: ApiRequest()
+    val openPath: java.nio.file.Path? get() = activeRequest?.openPath
     val dirty: Boolean get() = active?.dirty == true
-    val resultId: String? get() = active?.resultId
-    val status: String? get() = active?.status
+    val resultId: String? get() = activeRequest?.resultId
+    val status: String? get() = activeRequest?.status
+
+    /**
+     * Open tabs holding unsaved work that a checkout of [project] would destroy.
+     *
+     * Both kinds count. A variables table is as much unsaved work as a request,
+     * and it is written into the project directory git is about to rewrite — so
+     * leaving it out would let the guard wave through the one case where the
+     * file being overwritten is the one on screen.
+     */
+    fun dirtyTabsUnder(project: java.nio.file.Path): List<EditorTab> = tabs.filter { tab ->
+        tab.dirty && when (tab) {
+            is RequestTab -> tab.openPath?.startsWith(project) == true
+            is VariablesTab -> tab.project == project
+        }
+    }
+
+    /**
+     * Brings open tabs back in line with what is now on disk.
+     *
+     * A checkout or a pull rewrites the working tree underneath every tab
+     * pointing into it. Callers guarantee no tab under [project] is dirty
+     * before this runs, so replacing a request here cannot destroy an edit.
+     *
+     * A tab whose file is absent on the new branch is deliberately **not**
+     * closed. It keeps its content, loses its path and becomes an unsaved
+     * draft, so the work is still there to save somewhere else. Closing tabs
+     * out from under someone during a branch switch is the kind of thing people
+     * do not forgive, and "your request vanished" is indistinguishable from a
+     * bug even when it is correct.
+     *
+     * @param read supplied as a lambda so this stays free of `CollectionStore`.
+     */
+    fun reconcile(
+        project: java.nio.file.Path,
+        branch: String,
+        read: (java.nio.file.Path) -> Result<ApiRequest>,
+    ): ReconcileReport {
+        var reloaded = 0
+        var orphaned = 0
+        var failed = 0
+        // A clean variables table under this project is re-read too: git has
+        // just replaced the file, and a pane still showing the old branch's
+        // values would substitute them into the next send and write them back
+        // over the new branch's on the next save.
+        tabs.filterIsInstance<VariablesTab>()
+            .filter { it.project == project && !it.dirty }
+            .forEach { it.rows = ProjectVariables.read(it.project) }
+
+        tabs.filterIsInstance<RequestTab>().forEach { tab ->
+            val path = tab.openPath ?: return@forEach
+            if (!path.startsWith(project)) return@forEach
+            if (!java.nio.file.Files.exists(path)) {
+                tab.openPath = null
+                tab.dirty = true
+                tab.status = "not on $branch"
+                orphaned++
+                return@forEach
+            }
+            read(path).fold(
+                onSuccess = { fresh ->
+                    // An unchanged file must not be written back: touching every
+                    // tab's state would recompose the whole editor on a checkout
+                    // that changed nothing.
+                    if (fresh != tab.request) {
+                        tab.request = fresh
+                        tab.status = "reloaded from $branch"
+                        reloaded++
+                    }
+                },
+                onFailure = { error ->
+                    // Leave the in-memory request alone: whatever is on disk is
+                    // unreadable, and the copy in the tab is the better one.
+                    tab.status = "could not reload: ${error.message}"
+                    onLog("warn", "${tab.title} could not be reloaded on $branch: ${error.message}")
+                    failed++
+                },
+            )
+        }
+        return ReconcileReport(reloaded, orphaned, failed)
+    }
 
     /** Session the synthesized fallback rows are filed under. */
     private var sessionId: Int? = null
     private var sessionGeneration = -1
 
-    val busy: Boolean get() = active?.busy == true
+    val busy: Boolean get() = activeRequest?.busy == true
 
     /**
      * Runs an OAuth authorisation on the state's own scope.
@@ -143,15 +301,47 @@ class ApiClientState(
      * [onProgress] is called with (busy, message) and always ends with busy
      * false, so a caller cannot be left with a spinner and no outcome.
      */
+    /**
+     * The variables the active request would send with.
+     *
+     * Authorising is a second entry point into the network, and it has to agree
+     * with the first: `OAuthTokens` keys a token on the grant, client id, token
+     * URL, scope and audience. Store a token under `{{cid}}` and look it up
+     * under the resolved value and the lookup misses every time — which shows up
+     * not as an error but as a client that silently re-authorises on every send.
+     */
+    fun variables(): Map<String, String> = variablesFor(homeOf(activeRequest))
+
+    /**
+     * Names the request asked for and the project could not supply.
+     *
+     * A warning rather than a failure: an unknown name resolving to nothing is
+     * the documented rule, and the send has already happened by the time this
+     * runs. What was missing was any way to find out — the request simply went
+     * out with a hole where the value should have been.
+     */
+    private fun reportMissing(vars: TrackedVariables) {
+        if (vars.missing.isEmpty()) return
+        val names = vars.missing.joinToString { "{{$it}}" }
+        onLog("warn", "no variable named $names — sent as empty")
+    }
+
     fun authorize(oauth: OAuthService, auth: ApiAuth, onProgress: (Boolean, String?) -> Unit) {
         // One at a time: a second authorisation would try to bind the same
         // loopback port and fail on the socket rather than on anything the user
         // could act on.
         cancelAuthorization()
+        val vars = TrackedVariables(variables())
         val job = scope.launch {
-            oauth.authorize(auth) { message -> onProgress(true, message) }
+            oauth.authorize(auth.resolved(vars).also { reportMissing(vars) }) { message ->
+                onProgress(true, message)
+            }
                 .onSuccess { onProgress(false, "Token obtained.") }
-                .onFailure { onProgress(false, it.message ?: "Authorisation failed.") }
+                .onFailure {
+                    val message = it.message ?: "Authorisation failed."
+                    onProgress(false, message)
+                    onLog("error", "authorisation failed: $message")
+                }
         }
         authJob = job
         // On completion rather than in the body: a cancelled coroutine may never
@@ -162,12 +352,6 @@ class ApiClientState(
             if (cause is CancellationException) onProgress(false, "Stopped listening.")
         }
     }
-
-    /**
-     * Whether an authorisation is running — a browser open, a loopback socket
-     * bound, or a device code being polled.
-     */
-    val authorizing: Boolean get() = authJob?.isActive == true
 
     /**
      * Stops one.
@@ -183,22 +367,27 @@ class ApiClientState(
 
     /** As [authorize], for the refresh. */
     fun refreshToken(oauth: OAuthService, auth: ApiAuth, onProgress: (Boolean, String?) -> Unit) {
+        val vars = TrackedVariables(variables())
         scope.launch {
-            oauth.refresh(auth)
+            oauth.refresh(auth.resolved(vars).also { reportMissing(vars) })
                 .onSuccess { onProgress(false, "Token refreshed.") }
-                .onFailure { onProgress(false, it.message ?: "Refresh failed.") }
+                .onFailure {
+                    val message = it.message ?: "Refresh failed."
+                    onProgress(false, message)
+                    onLog("error", "token refresh failed: $message")
+                }
         }
     }
 
     fun edit(transform: (ApiRequest) -> ApiRequest) {
-        val tab = active ?: return
+        val tab = activeRequest ?: return
         tab.request = transform(tab.request)
         tab.dirty = true
     }
 
     /** Records that the in-memory request now matches what is on disk. */
     fun markSaved(path: java.nio.file.Path) {
-        val tab = active ?: return
+        val tab = activeRequest ?: return
         tab.openPath = path
         tab.dirty = false
     }
@@ -211,8 +400,32 @@ class ApiClientState(
      * without a path (history, an import, a captured flow) always gets a new
      * tab, since there is nothing to collide with.
      */
+    /**
+     * Opens [project]'s variables, or focuses the tab already showing them.
+     *
+     * Reading from disk on open rather than holding a cache: the file is
+     * ordinary project content that a checkout or a pull can replace, and the
+     * tab is where you would notice it had.
+     */
+    fun openVariables(project: java.nio.file.Path): VariablesTab {
+        val existing = tabs.filterIsInstance<VariablesTab>().firstOrNull { it.project == project }
+        if (existing != null) {
+            activeId = existing.id
+            return existing
+        }
+        val tab = VariablesTab(nextTabId++, project, ProjectVariables.read(project))
+        val blank = activeRequest?.takeIf {
+            it.openPath == null && !it.dirty && it.request == ApiRequest()
+        }
+        if (blank != null) tabs[tabs.indexOf(blank)] = tab else tabs.add(tab)
+        activeId = tab.id
+        return tab
+    }
+
     fun open(request: ApiRequest, path: java.nio.file.Path?): RequestTab {
-        val existing = path?.let { wanted -> tabs.firstOrNull { it.openPath == wanted } }
+        val existing = path?.let { wanted ->
+            tabs.filterIsInstance<RequestTab>().firstOrNull { it.openPath == wanted }
+        }
         if (existing != null) {
             existing.request = request
             existing.dirty = false
@@ -221,19 +434,21 @@ class ApiClientState(
         }
         val tab = RequestTab(nextTabId++, request, path)
         // A pristine, unused blank tab is replaced rather than accumulated.
-        val blank = active?.takeIf { it.openPath == null && !it.dirty && it.request == ApiRequest() }
+        val blank = activeRequest?.takeIf {
+            it.openPath == null && !it.dirty && it.request == ApiRequest()
+        }
         if (blank != null) tabs[tabs.indexOf(blank)] = tab else tabs.add(tab)
         activeId = tab.id
         return tab
     }
 
-    fun focus(tab: RequestTab) {
+    fun focus(tab: EditorTab) {
         activeId = tab.id
     }
 
     /** Closes a tab, cancelling anything it had in flight. */
-    fun close(tab: RequestTab) {
-        tab.inFlight?.cancel()
+    fun close(tab: EditorTab) {
+        (tab as? RequestTab)?.inFlight?.cancel()
         val index = tabs.indexOf(tab)
         if (index < 0) return
         tabs.removeAt(index)
@@ -242,7 +457,7 @@ class ApiClientState(
     }
 
     fun cancel() {
-        val tab = active ?: return
+        val tab = activeRequest ?: return
         tab.inFlight?.cancel()
         tab.inFlight = null
         tab.status = "cancelled"
@@ -250,7 +465,9 @@ class ApiClientState(
 
     /** Sends the current request and binds the response to the captured flow. */
     fun send() {
-        val tab = active ?: return
+        // Only a request can be sent. Guarding here rather than only on the
+        // button, because the menu bar has a Send too and it is not disabled.
+        val tab = activeRequest ?: return
         if (tab.busy) return
         val outgoing = tab.request
         val viaProxy = service.isRunning
@@ -267,9 +484,14 @@ class ApiClientState(
         history.record(outgoing)
 
         tab.inFlight = scope.launch {
+            val vars = TrackedVariables(variablesFor(homeOf(tab)))
             val outcome = withContext(Dispatchers.IO) {
-                sender.execute(outgoing, settings, marker.takeIf { viaProxy }, viaProxy, port, tokens)
+                sender.execute(
+                outgoing, settings, marker.takeIf { viaProxy }, viaProxy, port, tokens,
+                variables = vars,
+            )
             }
+            reportMissing(vars)
 
             // The sidecar emits its frames before the response reaches us, but
             // they land on the event thread as separate runnables — so wait for
@@ -285,6 +507,13 @@ class ApiClientState(
                 captured != null -> "${outcome.status}${hopsOf(outcome)} · ${outcome.elapsedMs.toLong()} ms"
                 viaProxy -> "${outcome.status} · ${outcome.elapsedMs.toLong()} ms · not captured"
                 else -> "${outcome.status} · ${outcome.elapsedMs.toLong()} ms · proxy stopped"
+            }
+            outcome.failure?.let { failure ->
+                // The tab's status line says this too, but only until the next
+                // send replaces it — and a request that failed is usually one you
+                // come back to. `resolved` so the log names the URL that was
+                // actually attempted, not the one with `{{host}}` still in it.
+                onLog("error", "${outgoing.method} ${outgoing.resolved(variables()).url} failed: $failure")
             }
             if (viaProxy && captured == null && outcome.failure == null) {
                 onLog("warn", "no captured flow matched this request; showing a local copy")
@@ -323,7 +552,7 @@ class ApiClientState(
                 }
                 i--
             }
-            delay(CORRELATION_POLL_MS)
+            delay(CORRELATION_POLL_MS.milliseconds)
         }
         return null
     }
@@ -419,7 +648,7 @@ class ApiClientState(
      */
     private fun sessionId(): Int {
         if (sessionId == null || sessionGeneration != store.generation) {
-            sessionId = store.beginSession("API client").also { store.endSession(it) }
+            sessionId = store.beginSession("Request Forge").also { store.endSession(it) }
             sessionGeneration = store.generation
         }
         return sessionId ?: 0

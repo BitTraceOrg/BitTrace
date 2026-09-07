@@ -1,13 +1,11 @@
 package org.bittrace.api
 
+import org.bittrace.data.writeAtomically
+import org.bittrace.data.readOrDefault
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
-import com.charleskorn.kaml.Yaml
-import com.charleskorn.kaml.YamlConfiguration
-import java.nio.file.Files
 import java.nio.file.Path
-import java.nio.file.StandardCopyOption
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -47,15 +45,9 @@ class HistoryStore(private val file: Path? = defaultPath()) {
     /** Reads the history file. Blocking — call off the UI thread. */
     fun load() {
         val path = file ?: return
-        entries = try {
-            if (Files.isRegularFile(path)) {
-                yaml.decodeFromString(HistoryFile.serializer(), Files.readString(path)).entries
-            } else {
-                emptyList()
-            }
-        } catch (e: Exception) {
-            // A corrupt history is not worth failing the view over.
-            emptyList()
+        // A corrupt history is not worth failing the view over.
+        entries = readOrDefault(path, emptyList()) {
+            appYaml.decodeFromString(HistoryFile.serializer(), it).entries
         }
     }
 
@@ -91,12 +83,8 @@ class HistoryStore(private val file: Path? = defaultPath()) {
         val path = file ?: return
         val snapshot = HistoryFile(entries)
         scope.launch {
-            runCatching {
-                path.parent?.let { Files.createDirectories(it) }
-                val temp = path.resolveSibling("${path.fileName}.tmp")
-                Files.writeString(temp, yaml.encodeToString(HistoryFile.serializer(), snapshot))
-                Files.move(temp, path, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
-            }.onFailure { System.err.println("[api] history save failed: $it") }
+            runCatching { writeAtomically(path, appYaml.encodeToString(HistoryFile.serializer(), snapshot)) }
+                .onFailure { System.err.println("[api] history save failed: $it") }
         }
     }
 
@@ -112,8 +100,5 @@ class HistoryStore(private val file: Path? = defaultPath()) {
 
         private const val CAPACITY = 200
 
-        private val yaml = Yaml(
-            configuration = YamlConfiguration(encodeDefaults = true, strictMode = false),
-        )
     }
 }

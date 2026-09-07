@@ -50,10 +50,3 @@ private fun ImportedRequest.toApiRequest(): ApiRequest = ApiRequest(
         .orEmpty(),
     body = ApiBody(contentType = contentType, text = body),
 )
-
-/** A short, file-name-safe label like `POST users`. */
-private fun nameFor(method: String, url: String): String {
-    val path = url.substringAfter("://", url).substringAfter('/', "").substringBefore('?')
-    val leaf = path.trimEnd('/').substringAfterLast('/').ifBlank { "root" }
-    return fileNameFor("${method.uppercase()} $leaf") ?: method.uppercase()
-}

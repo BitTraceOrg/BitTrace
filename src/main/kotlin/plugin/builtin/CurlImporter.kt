@@ -138,9 +138,9 @@ class CurlImporter : RequestImporter {
         while (i < text.length) {
             val c = text[i]
             when {
-                quote != ' ' -> when {
-                    c == quote -> quote = ' '
-                    c == '\\' && quote == '"' && i + 1 < text.length -> { current.append(text[i + 1]); i++ }
+                quote != ' ' -> when (c) {
+                    quote -> quote = ' '
+                    '\\' if quote == '"' && i + 1 < text.length -> { current.append(text[i + 1]); i++ }
                     else -> current.append(c)
                 }
 

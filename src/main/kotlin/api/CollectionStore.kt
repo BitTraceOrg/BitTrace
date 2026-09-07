@@ -13,6 +13,7 @@ import kotlin.io.path.isDirectory
 import kotlin.io.path.name
 import kotlin.io.path.nameWithoutExtension
 import org.bittrace.data.SettingsStore
+import org.bittrace.data.writeAtomically
 
 /** A node in the collections tree. The tree mirrors the folder layout exactly. */
 sealed interface Node {
@@ -31,12 +32,47 @@ sealed interface FolderNode : Node {
     val children: List<Node>
 }
 
-/** A project: the top level, holding collections and nothing else. */
+/**
+ * A project: the top level, holding collections and its variables.
+ *
+ * [variables] is a sibling of [children] rather than one of them. Keeping
+ * `children` as collections means everything that walks the tree looking for
+ * requests — and there are several such walks — keeps saying what it means,
+ * and the variables row is emitted where it belongs by whoever is drawing the
+ * tree rather than by every consumer having to filter it back out.
+ */
 class ProjectNode(
     override val path: Path,
     override val name: String,
     override val children: List<CollectionNode>,
-) : FolderNode
+) : FolderNode {
+    val variables: VariablesNode = VariablesNode(ProjectVariables.pathIn(path))
+}
+
+/**
+ * A project's variables, shown as a row under it.
+ *
+ * A `Node` so the tree can select and open it like anything else, and so the
+ * `when`s over `Node` fail to compile until each has decided what to do with
+ * one. It is not a `FolderNode` — nothing lives inside it — and it is the only
+ * node whose path is a file the user never names.
+ */
+class VariablesNode(override val path: Path, override val name: String = "Variables") : Node
+
+/**
+ * Every node in a tree, depth-first: a project, its variables, its collections,
+ * and their requests.
+ *
+ * Two callers had hand-rolled this as nested `flatMap`s over `children`, and
+ * both of them silently assumed a project's children are the whole story —
+ * which stopped being true when the variables row arrived. Callers that want
+ * only part of this say so with `filterIsInstance`, which is a statement about
+ * what they need rather than a traversal that happens to omit things.
+ */
+fun List<ProjectNode>.walk(): Sequence<Node> = asSequence().flatMap { project ->
+    sequenceOf<Node>(project, project.variables) +
+        project.children.asSequence().flatMap { sequenceOf<Node>(it) + it.children }
+}
 
 /** A collection inside a project, holding saved requests. */
 class CollectionNode(
@@ -86,6 +122,15 @@ class CollectionStore(private val root: Path? = defaultRoot()) {
 
     val available: Boolean get() = root != null
 
+    /**
+     * Called with the path touched by any mutation, if anybody is listening.
+     *
+     * One hook rather than a git dependency: the store's job is the filesystem,
+     * and it should not know that something downstream cares whether a file
+     * changed. What it can honestly say is that it changed one.
+     */
+    var onChanged: ((Path) -> Unit)? = null
+
     /** Re-walks the collections folder. Blocking — call off the UI thread. */
     fun reload() {
         val dir = root ?: return
@@ -94,6 +139,7 @@ class CollectionStore(private val root: Path? = defaultRoot()) {
             if (!Files.isDirectory(dir)) {
                 emptyList()
             } else {
+                // The layout must settle before anything creates a repo.
                 adoptLegacyLayout(dir)
                 foldersIn(dir).map { project ->
                     ProjectNode(project, project.name, foldersIn(project).map(::collectionAt))
@@ -110,7 +156,7 @@ class CollectionStore(private val root: Path? = defaultRoot()) {
         dir,
         dir.name,
         entriesIn(dir)
-            .filter { !it.isDirectory() && it.extension.equals("yaml", ignoreCase = true) }
+            .filter(::isRequestFile)
             .sortedBy { it.name.lowercase() }
             .map { RequestNode(it, it.nameWithoutExtension, methodIn(it)) },
     )
@@ -121,6 +167,20 @@ class CollectionStore(private val root: Path? = defaultRoot()) {
         .sortedBy { it.name.lowercase() }
 
     private fun entriesIn(dir: Path): List<Path> = Files.newDirectoryStream(dir).use { it.toList() }
+
+    /**
+     * Whether [path] is a saved request.
+     *
+     * The dot-file exclusion is the whole point of having one predicate. It was
+     * written into the legacy-layout check and left out of the walk that builds
+     * a collection's rows, so a project's own dot-prefixed yaml — the variables
+     * file, or anything like it — would have shown up as a request one level
+     * down. One predicate makes the two disagree impossible rather than unlikely.
+     */
+    private fun isRequestFile(path: Path): Boolean =
+        !path.isDirectory() &&
+            !path.name.startsWith(".") &&
+            path.extension.equals("yaml", ignoreCase = true)
 
     /**
      * Moves a pre-project layout under one project, once.
@@ -146,8 +206,18 @@ class CollectionStore(private val root: Path? = defaultRoot()) {
         }
     }
 
+    /**
+     * Whether [dir] holds a saved request rather than collections — the tell
+     * that it is a pre-project collection sitting at the root.
+     *
+     * Dot-files do not count. A project holds `.bittrace-variables.yaml` at
+     * exactly this level, and it is a `.yaml` file directly inside a top-level
+     * folder — precisely the shape being looked for here. Without this filter,
+     * adding that file makes every project look legacy, and the next reload
+     * sweeps the entire tree into a folder called "My project".
+     */
     private fun holdsRequestDirectly(dir: Path): Boolean = runCatching {
-        entriesIn(dir).any { !it.isDirectory() && it.extension.equals("yaml", ignoreCase = true) }
+        entriesIn(dir).any(::isRequestFile)
     }.getOrDefault(false)
 
     /**
@@ -189,11 +259,15 @@ class CollectionStore(private val root: Path? = defaultRoot()) {
      * failure part-way cannot truncate an existing request.
      */
     fun save(path: Path, request: ApiRequest): Result<Unit> = runCatching {
-        path.parent?.let { Files.createDirectories(it) }
-        val temp = path.resolveSibling("${path.fileName}.tmp")
-        Files.writeString(temp, RequestYaml.encode(request))
-        Files.move(temp, path, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
+        // Where a request may be written, checked centrally rather than at each
+        // caller. A request is a file inside a collection and nowhere else, and
+        // a caller that passes something else — a project folder, the variables
+        // file — is asking for one thing to be overwritten by another. Refusing
+        // here makes that a failed `Result` instead of a lost file.
+        check(depthOf(path) == REQUEST_DEPTH) { "A request can only be saved inside a collection." }
+        writeAtomically(path, RequestYaml.encode(request))
         reload()
+        onChanged?.invoke(path)
     }
 
     /** Creates an empty project folder. */
@@ -257,12 +331,18 @@ class CollectionStore(private val root: Path? = defaultRoot()) {
      * once you remember to save is not one you made in a folder.
      */
     fun createNamedRequest(collection: Path): Result<Path> = runCatching {
-        check(depthOf(collection) == COLLECTION_DEPTH) { "Requests are created inside a collection." }
+        // `isDirectory` as well as the depth: `depthOf` counts path components
+        // and nothing else, so `<project>/.bittrace-variables.yaml` reports a
+        // collection's depth and a request would be written *inside a file*.
+        check(depthOf(collection) == COLLECTION_DEPTH && collection.isDirectory()) {
+            "Requests are created inside a collection."
+        }
         val target = freeName(collection, "New request", ".yaml")
             ?: error("Too many requests are called 'New request'.")
         val name = target.name.substringBeforeLast('.')
         Files.writeString(target, RequestYaml.encode(ApiRequest(name = name)))
         reload()
+        onChanged?.invoke(target)
         target
     }
 
@@ -284,18 +364,20 @@ class CollectionStore(private val root: Path? = defaultRoot()) {
      * and because a file whose extension has drifted is a file nothing will
      * open.
      */
-    private fun freeName(parent: Path, stem: String, suffix: String): Path? {
+    private fun freeName(parent: Path, stem: String, suffix: String, taken: Set<String> = emptySet()): Path? {
         for (index in 1..MAX_DEFAULT_NAMES) {
             val safe = fileNameFor(if (index == 1) stem else "$stem $index") ?: continue
             val candidate = parent.resolve("$safe$suffix")
-            if (!Files.exists(candidate)) return candidate
+            if (!Files.exists(candidate) && candidate.name !in taken) return candidate
         }
         return null
     }
 
     /** The path a request with this name would occupy inside [collection]. */
     fun pathFor(collection: Path, displayName: String): Result<Path> = runCatching {
-        check(depthOf(collection) == COLLECTION_DEPTH) { "Requests are saved into a collection." }
+        check(depthOf(collection) == COLLECTION_DEPTH && collection.isDirectory()) {
+            "Requests are saved into a collection."
+        }
         val safe = fileNameFor(displayName) ?: error("'$displayName' is not a usable file name.")
         val target = collection.resolve("$safe.yaml")
         check(target.toString().length < MAX_PATH_CHARS) { "That path would be too long." }
@@ -313,6 +395,14 @@ class CollectionStore(private val root: Path? = defaultRoot()) {
         else -> null
     }
 
+    /** The project folder [path] sits under, or null when it is outside the root. */
+    fun projectOf(path: Path): Path? {
+        val dir = root ?: return null
+        val relative = runCatching { dir.relativize(path) }.getOrNull() ?: return null
+        if (relative.startsWith("..") || relative.nameCount < PROJECT_DEPTH) return null
+        return dir.resolve(relative.getName(0))
+    }
+
     /** How many levels below the collections root [path] sits; -1 if it is outside. */
     private fun depthOf(path: Path): Int {
         val dir = root ?: return -1
@@ -323,6 +413,7 @@ class CollectionStore(private val root: Path? = defaultRoot()) {
 
     /** Renames a project, collection or request, refusing rather than auto-suffixing a clash. */
     fun rename(node: Node, displayName: String): Result<Path> = runCatching {
+        check(node !is VariablesNode) { "The variables file is named by BitTrace." }
         val safe = fileNameFor(displayName) ?: error("'$displayName' is not a usable name.")
         val parent = node.path.parent ?: error("Cannot rename this item.")
         val target = if (node is RequestNode) parent.resolve("$safe.yaml") else parent.resolve(safe)
@@ -339,11 +430,15 @@ class CollectionStore(private val root: Path? = defaultRoot()) {
      * whole project" stops being unrecoverable.
      */
     fun delete(node: Node): Result<Unit> = runCatching {
+        // Deleting it would look like it worked: the next reload would show an
+        // empty Variables row again, with every value silently gone.
+        check(node !is VariablesNode) { "Clear the rows instead of deleting the variables." }
         val dir = root ?: error("No collections folder available.")
         val bin = dir.resolve(".trash").resolve(LocalDateTime.now().format(STAMP))
         Files.createDirectories(bin)
         Files.move(node.path, bin.resolve(node.path.name), StandardCopyOption.REPLACE_EXISTING)
         reload()
+        onChanged?.invoke(node.path)
     }
 
     /**
@@ -355,7 +450,9 @@ class CollectionStore(private val root: Path? = defaultRoot()) {
      * it needs no help from this app.
      */
     fun exportNode(node: Node, target: Path): Result<Int> = runCatching {
-        check(node !is RequestNode) { "Only a project or a collection can be exported." }
+        check(node is ProjectNode || node is CollectionNode) {
+            "Only a project or a collection can be exported."
+        }
         zipDirectory(node.path, target).getOrThrow()
     }
 
@@ -374,6 +471,10 @@ class CollectionStore(private val root: Path? = defaultRoot()) {
      * trade-off worth offering.
      */
     fun importInto(node: Node, archive: Path): Result<ImportReport> = runCatching {
+        // Before the depth check, which cannot tell a folder from a file: the
+        // variables file sits at a collection's depth and would otherwise be
+        // unzipped *into*.
+        check(node is FolderNode) { "A zip can only be imported into a project or a collection." }
         val depth = depthOf(node.path)
         check(depth == PROJECT_DEPTH || depth == COLLECTION_DEPTH) {
             "A zip can only be imported into a project or a collection."
@@ -394,14 +495,12 @@ class CollectionStore(private val root: Path? = defaultRoot()) {
             }
             wanted?.let { (stem, suffix) ->
                 // `taken` covers names claimed earlier in this same import,
-                // which are not on disk yet when the next one is resolved.
-                var candidate = freeName(node.path, stem, suffix)?.name
-                var bump = 1
-                while (candidate != null && candidate in taken && bump < MAX_DEFAULT_NAMES) {
-                    bump++
-                    candidate = freeName(node.path, "$stem $bump", suffix)?.name
-                }
-                candidate?.also { taken += it }
+                // which are not on disk yet when the next one is resolved —
+                // so the search has to consider both, which is why it takes the
+                // set rather than being re-run against it afterwards. Running it
+                // twice was the bug: the second pass restarted the numbering at
+                // the bumped stem, so `Auth 2` collided into `Auth 2 2`.
+                freeName(node.path, stem, suffix, taken)?.name?.also { taken += it }
             }
         }.getOrThrow()
 

@@ -1,5 +1,6 @@
 package org.bittrace.ui
 
+import org.bittrace.data.Platform
 import java.awt.Desktop
 import java.awt.FileDialog
 import java.awt.Frame
@@ -53,7 +54,7 @@ object FileDialogs {
      */
     fun revealInFolder(path: Path) {
         val absolute = path.toAbsolutePath()
-        if (System.getProperty("os.name").orEmpty().lowercase().contains("win")) {
+        if (Platform.isWindows) {
             runCatching { ProcessBuilder("explorer", "/select,$absolute").start() }
             return
         }

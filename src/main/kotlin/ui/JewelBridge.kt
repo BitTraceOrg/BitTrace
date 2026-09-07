@@ -12,11 +12,15 @@ import org.jetbrains.jewel.ui.component.styling.TabMetrics
 import org.jetbrains.jewel.intui.standalone.styling.defaults
 import org.jetbrains.jewel.foundation.theme.ThemeColorPalette
 import org.bittrace.plugin.theme.Ramp
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.TooltipPlacement
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import org.bittrace.plugin.theme.Palette
@@ -79,6 +83,7 @@ import org.jetbrains.jewel.ui.component.styling.TextAreaColors
 import org.jetbrains.jewel.ui.component.styling.TextAreaStyle
 import org.jetbrains.jewel.ui.component.styling.TextFieldColors
 import org.jetbrains.jewel.ui.component.styling.TextFieldStyle
+import org.jetbrains.jewel.ui.component.styling.TooltipMetrics
 import org.jetbrains.jewel.ui.component.styling.TooltipColors
 import org.jetbrains.jewel.ui.component.styling.TooltipStyle
 import org.jetbrains.jewel.window.styling.TitleBarColors
@@ -213,53 +218,53 @@ private fun Ramp.keyed(name: String): Map<String, Color> =
 private fun Palette.componentStyling(dark: Boolean): ComponentStyling {
     val base = if (dark) {
         ComponentStyling.dark(
-            checkboxStyle = checkboxStyle(dark),
-            chipStyle = chipStyle(dark),
-            comboBoxStyle = comboBoxStyle(dark),
-            defaultButtonStyle = defaultButtonStyle(dark),
-            defaultTabStyle = defaultTabStyle(dark),
-            dividerStyle = dividerStyle(dark),
-            editorTabStyle = editorTabStyle(dark),
-            groupHeaderStyle = groupHeaderStyle(dark),
-            iconButtonStyle = iconButtonStyle(dark),
-            linkStyle = linkStyle(dark),
-            menuStyle = menuStyle(dark),
-            outlinedButtonStyle = outlinedButtonStyle(dark),
-            radioButtonStyle = radioButtonStyle(dark),
-            scrollbarStyle = scrollbarStyle(dark),
-            segmentedControlButtonStyle = segmentedControlButtonStyle(dark),
-            segmentedControlStyle = segmentedControlStyle(dark),
-            popupContainerStyle = popupContainerStyle(dark),
-            selectableLazyColumnStyle = selectableLazyColumnStyle(dark),
-            simpleListItemStyle = simpleListItemStyle(dark),
-            textAreaStyle = textAreaStyle(dark),
-            textFieldStyle = textFieldStyle(dark),
-            tooltipStyle = tooltipStyle(dark),
+            checkboxStyle = checkboxStyle(true),
+            chipStyle = chipStyle(true),
+            comboBoxStyle = comboBoxStyle(true),
+            defaultButtonStyle = defaultButtonStyle(true),
+            defaultTabStyle = defaultTabStyle(true),
+            dividerStyle = dividerStyle(true),
+            editorTabStyle = editorTabStyle(true),
+            groupHeaderStyle = groupHeaderStyle(true),
+            iconButtonStyle = iconButtonStyle(true),
+            linkStyle = linkStyle(true),
+            menuStyle = menuStyle(true),
+            outlinedButtonStyle = outlinedButtonStyle(true),
+            radioButtonStyle = radioButtonStyle(true),
+            scrollbarStyle = scrollbarStyle(true),
+            segmentedControlButtonStyle = segmentedControlButtonStyle(true),
+            segmentedControlStyle = segmentedControlStyle(true),
+            popupContainerStyle = popupContainerStyle(true),
+            selectableLazyColumnStyle = selectableLazyColumnStyle(true),
+            simpleListItemStyle = simpleListItemStyle(true),
+            textAreaStyle = textAreaStyle(true),
+            textFieldStyle = textFieldStyle(true),
+            tooltipStyle = tooltipStyle(true),
         )
     } else {
         ComponentStyling.light(
-            checkboxStyle = checkboxStyle(dark),
-            chipStyle = chipStyle(dark),
-            comboBoxStyle = comboBoxStyle(dark),
-            defaultButtonStyle = defaultButtonStyle(dark),
-            defaultTabStyle = defaultTabStyle(dark),
-            dividerStyle = dividerStyle(dark),
-            editorTabStyle = editorTabStyle(dark),
-            groupHeaderStyle = groupHeaderStyle(dark),
-            iconButtonStyle = iconButtonStyle(dark),
-            linkStyle = linkStyle(dark),
-            menuStyle = menuStyle(dark),
-            outlinedButtonStyle = outlinedButtonStyle(dark),
-            radioButtonStyle = radioButtonStyle(dark),
-            scrollbarStyle = scrollbarStyle(dark),
-            segmentedControlButtonStyle = segmentedControlButtonStyle(dark),
-            segmentedControlStyle = segmentedControlStyle(dark),
-            popupContainerStyle = popupContainerStyle(dark),
-            selectableLazyColumnStyle = selectableLazyColumnStyle(dark),
-            simpleListItemStyle = simpleListItemStyle(dark),
-            textAreaStyle = textAreaStyle(dark),
-            textFieldStyle = textFieldStyle(dark),
-            tooltipStyle = tooltipStyle(dark),
+            checkboxStyle = checkboxStyle(false),
+            chipStyle = chipStyle(false),
+            comboBoxStyle = comboBoxStyle(false),
+            defaultButtonStyle = defaultButtonStyle(false),
+            defaultTabStyle = defaultTabStyle(false),
+            dividerStyle = dividerStyle(false),
+            editorTabStyle = editorTabStyle(false),
+            groupHeaderStyle = groupHeaderStyle(false),
+            iconButtonStyle = iconButtonStyle(false),
+            linkStyle = linkStyle(false),
+            menuStyle = menuStyle(false),
+            outlinedButtonStyle = outlinedButtonStyle(false),
+            radioButtonStyle = radioButtonStyle(false),
+            scrollbarStyle = scrollbarStyle(false),
+            segmentedControlButtonStyle = segmentedControlButtonStyle(false),
+            segmentedControlStyle = segmentedControlStyle(false),
+            popupContainerStyle = popupContainerStyle(false),
+            selectableLazyColumnStyle = selectableLazyColumnStyle(false),
+            simpleListItemStyle = simpleListItemStyle(false),
+            textAreaStyle = textAreaStyle(false),
+            textFieldStyle = textFieldStyle(false),
+            tooltipStyle = tooltipStyle(false),
         )
     }
     return base.decoratedWindow(titleBarStyle = titleBarStyle(dark))
@@ -681,9 +686,9 @@ private fun Palette.defaultTabStyle(dark: Boolean): TabStyle {
         )
     }
     return if (dark) {
-        TabStyle.Default.dark(colors = colors, metrics = compactTabMetrics(), scrollbarStyle = tabScrollbarStyle(dark))
+        TabStyle.Default.dark(colors = colors, metrics = compactTabMetrics(), scrollbarStyle = tabScrollbarStyle(true))
     } else {
-        TabStyle.Default.light(colors = colors, metrics = compactTabMetrics(), scrollbarStyle = tabScrollbarStyle(dark))
+        TabStyle.Default.light(colors = colors, metrics = compactTabMetrics(), scrollbarStyle = tabScrollbarStyle(false))
     }
 }
 
@@ -732,9 +737,9 @@ private fun Palette.editorTabStyle(dark: Boolean): TabStyle {
         )
     }
     return if (dark) {
-        TabStyle.Editor.dark(colors = colors, metrics = editorTabMetrics(), scrollbarStyle = tabScrollbarStyle(dark))
+        TabStyle.Editor.dark(colors = colors, metrics = editorTabMetrics(), scrollbarStyle = tabScrollbarStyle(true))
     } else {
-        TabStyle.Editor.light(colors = colors, metrics = editorTabMetrics(), scrollbarStyle = tabScrollbarStyle(dark))
+        TabStyle.Editor.light(colors = colors, metrics = editorTabMetrics(), scrollbarStyle = tabScrollbarStyle(false))
     }
 }
 
@@ -751,7 +756,6 @@ private fun editorTabMetrics(): TabMetrics =
         tabPadding = PaddingValues(horizontal = 10.dp),
         tabContentSpacing = 6.dp,
     )
-
 
 /**
  * A tab strip with no scrollbar of its own.
@@ -789,7 +793,12 @@ private fun Palette.tooltipStyle(dark: Boolean): TooltipStyle {
     } else {
         TooltipColors.light(backgroundColor = head, contentColor = text, borderColor = line, shadow = Color.Transparent)
     }
-    return if (dark) TooltipStyle.dark(intUiTooltipColors = colors) else TooltipStyle.light(intUiTooltipColors = colors)
+
+    return if (dark) {
+        TooltipStyle.dark(intUiTooltipColors = colors)
+    } else {
+        TooltipStyle.light(intUiTooltipColors = colors)
+    }
 }
 
 @Composable

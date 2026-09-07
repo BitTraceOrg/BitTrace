@@ -1,4 +1,4 @@
-package org.bittrace.components
+package org.bittrace.ui
 
 import androidx.compose.ui.graphics.Color
 import java.time.Instant
@@ -7,7 +7,6 @@ import java.time.OffsetDateTime
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import org.bittrace.data.TrafficRow
-import org.bittrace.ui.P
 
 /** Row-to-cell formatting shared by the flow table and the waterfall. */
 

@@ -1,4 +1,4 @@
-package org.bittrace.components
+package org.bittrace.ui.layouts.forge.components
 
 import androidx.compose.foundation.layout.height
 import org.bittrace.ui.Typo
@@ -15,11 +15,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import org.bittrace.api.KeyValue
-import org.bittrace.ui.CheckBox
+import org.bittrace.ui.components.CheckBox
 import org.bittrace.ui.P
-import org.bittrace.ui.PaneHeader
-import org.bittrace.ui.PzText
-import org.bittrace.ui.TextInput
+import org.bittrace.ui.components.PaneHeader
+import org.bittrace.ui.components.PzText
+import org.bittrace.ui.components.TextInput
 import org.bittrace.ui.bottomBorder
 import org.jetbrains.jewel.ui.component.IconActionButton
 import org.jetbrains.jewel.ui.icons.AllIconsKeys
@@ -57,27 +57,31 @@ fun KvEditor(
             PzText("Value", color = P.dim, style = Typo.label, family = P.Ui)
         }
 
-        rows.forEachIndexed { index, row ->
+        // Every row plus one blank, from a single loop.
+        //
+        // The blank used to be a second call site after the loop, and that is
+        // what made typing into it append a row per keystroke. A field keeps its
+        // caret and its own text buffer in a `TextFieldState` tied to its
+        // position in the composition; appending put the new row at a *new*
+        // position inside the loop while the caret stayed in the blank field
+        // below it, still holding everything typed so far. So "c" appended a row
+        // "c", "cl" appended a row "cl", and so on down the screenshot.
+        //
+        // In one loop the blank sits at index `rows.size`, and appending makes
+        // that same position a real row — the field keeps its state, its text
+        // now matches the row behind it, and the caret never moves. A fresh
+        // blank appears below.
+        repeat(rows.size + 1) { index ->
+            val blank = index == rows.size
             KvRowEditor(
-                row = row,
+                row = rows.getOrElse(index) { KeyValue() },
                 nameHint = nameHint,
                 valueHint = valueHint,
-                onChange = { updated -> onChange(rows.toMutableList().also { it[index] = updated }) },
-                onRemove = { onChange(rows.toMutableList().also { it.removeAt(index) }) },
+                placeholder = blank,
+                onChange = { updated -> kvEdited(rows, index, updated)?.let(onChange) },
+                onRemove = { if (!blank) onChange(kvRemoved(rows, index)) },
             )
         }
-
-        // The always-present blank row: typing in it appends a real one.
-        KvRowEditor(
-            row = KeyValue(),
-            nameHint = nameHint,
-            valueHint = valueHint,
-            placeholder = true,
-            // Belt and braces: a row with nothing in it is never worth
-            // appending, whatever the field reports.
-            onChange = { if (it.name.isNotEmpty() || it.value.isNotEmpty()) onChange(rows + it) },
-            onRemove = {},
-        )
     }
 }
 
@@ -154,3 +158,29 @@ private val NAME_WIDTH = 180.dp
  * this plus the 8dp that follows every cell.
  */
 private val ENABLE_WIDTH = 24.dp
+
+/**
+ * The list an edit at [index] produces, or null when there is nothing to do.
+ *
+ * Split out from the composable because it is the part with a rule in it, and
+ * because a Compose test rig is not worth standing up to assert what amounts to
+ * two list operations. [index] past the end is the blank trailing row: it
+ * appends, but only once there is something to append — an edit that leaves the
+ * row empty is a row that was never real, and appending it would put a blank
+ * line above the blank line.
+ */
+internal fun kvEdited(rows: List<KeyValue>, index: Int, updated: KeyValue): List<KeyValue>? = when {
+    index in rows.indices -> rows.toMutableList().also { it[index] = updated }
+    updated.name.isEmpty() && updated.value.isEmpty() -> null
+    else -> rows + updated
+}
+
+/**
+ * The list with the row at [index] gone.
+ *
+ * By position, not by value: `rows - row` would take every row equal to it, and
+ * two rows with the same name and value are a thing people really do have while
+ * they are in the middle of editing one of them.
+ */
+internal fun kvRemoved(rows: List<KeyValue>, index: Int): List<KeyValue> =
+    if (index in rows.indices) rows.toMutableList().also { it.removeAt(index) } else rows

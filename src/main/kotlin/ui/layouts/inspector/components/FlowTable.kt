@@ -1,5 +1,14 @@
-package org.bittrace.components
+package org.bittrace.ui.layouts.inspector.components
 
+import org.bittrace.ui.bytesStr
+import org.bittrace.ui.durStr
+import org.bittrace.ui.endStr
+import org.bittrace.ui.hostPath
+import org.bittrace.ui.kindOfRow
+import org.bittrace.ui.startStr
+import org.bittrace.ui.statusOf
+import org.bittrace.ui.tlsText
+import org.bittrace.ui.components.EmptyState
 import org.jetbrains.jewel.ui.icons.AllIconsKeys
 import org.bittrace.ui.copyToClipboard
 import org.bittrace.plugin.flow.FlowActionContext
@@ -24,14 +33,16 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import org.bittrace.data.ExportMark
 import org.bittrace.data.LIVE_SESSION
+import org.bittrace.data.HTTP_METHODS
 import org.bittrace.data.TrafficRow
-import org.bittrace.ui.CellText
-import org.bittrace.ui.ColumnFilter
-import org.bittrace.ui.DataGrid
-import org.bittrace.ui.GridColumn
-import org.bittrace.ui.GridMarkers
+import org.bittrace.ui.components.CellText
+import org.bittrace.ui.components.ColumnFilter
+import org.bittrace.ui.components.DataGrid
+import org.bittrace.ui.components.GridFacetBinding
+import org.bittrace.ui.components.GridColumn
+import org.bittrace.ui.components.GridMarkers
 import org.bittrace.ui.P
-import org.bittrace.ui.PzText
+import org.bittrace.ui.components.PzText
 import org.bittrace.ui.bottomBorder
 import org.bittrace.ui.topBorder
 
@@ -59,25 +70,8 @@ typealias Col = GridColumn<TrafficRow>
  */
 val STATUS_CLASSES = listOf("1xx", "2xx", "3xx", "4xx", "5xx", "ERR")
 
-/** Which class a row's status falls in. */
-fun statusClassOf(row: TrafficRow): String {
-    val response = row.response ?: return "ERR"
-    if (response.error) return "ERR"
-    val status = response.response.status
-    return if (status in 100..599) "${status / 100}xx" else "ERR"
-}
-
-/**
- * Every method the filter offers.
- *
- * RFC 9110's set plus PATCH and the WebDAV verbs that turn up in real traffic.
- * Listed rather than derived, for the same reason as the status classes: you
- * filter for DELETE *before* one happens, which is when it matters.
- */
-val HTTP_METHOD_FACETS = listOf(
-    "GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "CONNECT", "OPTIONS", "TRACE",
-    "PROPFIND", "PROPPATCH", "MKCOL", "COPY", "MOVE", "LOCK", "UNLOCK",
-)
+/** Which class a row's status falls in — the band's rule, under this list's name. */
+fun statusClassOf(row: TrafficRow): String = statusBucket(row, reset = "ERR")
 
 /**
  * The kinds the Type column sorts traffic into.
@@ -130,16 +124,16 @@ fun defaultColumns(): List<Col> = listOf(
     },
     Col(
         "method", "Method", 60f,
-        facets = HTTP_METHOD_FACETS,
+        facets = HTTP_METHODS,
         value = { it.request.request.method },
         facet = { it.request.request.method.uppercase() },
     ) { CellText(it.request.request.method, P.info) },
-    // Faceted by host: the popup lists every host captured, ticking any number
-    // of them. Typing still matches the whole URL, so path filtering survives.
+    // Typed text only. A host list here would be as long as the capture is
+    // varied, and the overview band's Host column already offers that set with
+    // cross-filtered counts — which is the version worth having.
     Col(
         "url", "Host / path", 380f,
         value = { it.request.request.url },
-        facet = { hostPath(it.request.request.url).first },
     ) {
         val url = it.request.request.url
         val scheme = url.substringBefore("://", "")
@@ -149,8 +143,10 @@ fun defaultColumns(): List<Col> = listOf(
                 CellText(scheme, if (scheme == "https") P.ok else P.warn)
                 CellText("://", P.faint)
             }
-            CellText(host, P.faint)
-            CellText(path, P.text)
+            // Marked, not just filtered: on a long path the point of a text
+            // search is which part of it matched.
+            CellText(highlighted(host, P.faint))
+            CellText(highlighted(path, P.text))
         }
     },
     Col(
@@ -223,8 +219,7 @@ enum class Outcome {
      */
     fun matches(row: TrafficRow): Boolean {
         if (this == ALL) return true
-        val response = row.response ?: return false
-        val failed = response.error || response.response.status >= 400
+        val failed = row.failed ?: return false
         return if (this == FAILED) failed else !failed
     }
 }
@@ -232,29 +227,6 @@ enum class Outcome {
 /** Applies the outcome filter; [Outcome.ALL] passes the list straight through. */
 fun applyOutcome(rows: List<TrafficRow>, outcome: Outcome): List<TrafficRow> =
     if (outcome == Outcome.ALL) rows else rows.filter { outcome.matches(it) }
-
-/**
- * How much each flow shows in the table.
- *
- * Resolved once, by [from], when the traffic view is built — never per row and
- * never per frame. Rows and cells receive the decision as a value, so switching
- * modes is a structural choice made at one place rather than a settings lookup
- * repeated thousands of times as traffic streams in.
- */
-enum class TableMode {
-    /** One line per flow. */
-    COMPACT,
-
-    /** The same line, plus a borderless second line carrying the timing ribbon. */
-    DETAILED,
-    ;
-
-    companion object {
-        /** Parses the persisted `Settings.tableMode`; anything unrecognised is compact. */
-        fun from(value: String): TableMode =
-            if (value.equals("detailed", ignoreCase = true)) DETAILED else COMPACT
-    }
-}
 
 /** One full-width line in the flow list marking a session boundary. */
 class SessionBanner(val id: String, val label: String)
@@ -336,10 +308,9 @@ fun FlowTable(
     cols: SnapshotStateList<Col>,
     filters: SnapshotStateMap<String, ColumnFilter>,
     rows: List<TrafficRow>,
-    /** Unfiltered rows, so the host list does not shrink as hosts are ticked. */
+    /** Unfiltered rows, so the empty state can tell "nothing captured" from "nothing matched". */
     allRows: List<TrafficRow>,
     selectedId: String?,
-    mode: TableMode,
     banners: GridMarkers<SessionBanner>?,
     /** Reads a captured body, for the clipboard actions. */
     bodyProvider: (String, BodySide) -> ByteArray?,
@@ -352,6 +323,8 @@ fun FlowTable(
     onDiffMarked: (() -> Unit)?,
     onNotice: (String) -> Unit,
     onSelect: (String) -> Unit,
+    /** The overview band's facets, which three of these columns edit in place. */
+    boundFacets: GridFacetBinding,
 ) {
     DataGrid(
         columns = cols,
@@ -359,21 +332,26 @@ fun FlowTable(
         key = { it.id },
         modifier = Modifier.fillMaxSize().background(P.panel),
         filters = filters,
-        filterSource = allRows,
         selectedKey = selectedId,
         onSelect = { onSelect(it.id) },
         reorderable = true,
-        // Bound once from the mode, so no row ever consults the setting.
-        rowDetail = if (mode == TableMode.DETAILED) {
-            { row -> FlowTimeline(row) }
-        } else {
-            null
-        },
-        // Start the ribbon at the second column, clear of the row number.
-        rowDetailIndent = 1,
         markers = banners,
+        boundFacets = boundFacets,
         markedKeys = marked,
         onToggleMark = onToggleMark,
+        empty = {
+            // Nothing captured and everything filtered out look the same from
+            // inside the grid and need opposite advice, so the message says
+            // which of the two this is.
+            EmptyState(
+                if (allRows.isEmpty()) {
+                    "No traffic captured yet"
+                } else {
+                    "No flows match — press ESC to clear the query"
+                },
+                centred = true,
+            )
+        },
         rowMenu = { row ->
             // Every entry answers "give me this flow somewhere else" — so they
             // all copy, and the one that fails says so rather than silently

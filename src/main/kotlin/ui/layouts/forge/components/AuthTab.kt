@@ -1,11 +1,14 @@
-package org.bittrace.components
+package org.bittrace.ui.layouts.forge.components
 
+import org.bittrace.ui.components.FormLabel
+import org.bittrace.ui.components.FormNote
+import org.bittrace.ui.components.FormStyle
+import org.bittrace.ui.components.FormTextField
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -38,16 +41,15 @@ import org.bittrace.api.SIG_RSA_SHA1
 import org.bittrace.api.grantLabel
 import org.bittrace.api.oauth.OAuthService
 import org.bittrace.api.oauth.redirectUri
-import org.bittrace.ui.CheckBox
-import org.bittrace.ui.Dropdown
-import org.bittrace.ui.GhostButton
-import org.bittrace.ui.PrimaryButton
+import org.bittrace.ui.components.CheckBox
+import org.bittrace.ui.components.Dropdown
+import org.bittrace.ui.components.GhostButton
+import org.bittrace.ui.components.PrimaryButton
 import org.bittrace.ui.copyToClipboard
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import kotlinx.coroutines.launch
 import org.jetbrains.jewel.ui.component.IconActionButton
 import org.jetbrains.jewel.ui.icons.AllIconsKeys
 import org.bittrace.api.AUTH_TYPES
@@ -56,13 +58,12 @@ import org.bittrace.api.ApiClientState
 import org.bittrace.api.KEY_IN_HEADER
 import org.bittrace.api.KEY_IN_QUERY
 import org.bittrace.api.authTypeLabel
-import org.bittrace.ui.Format
-import org.bittrace.ui.FormatPicker
+import org.bittrace.ui.components.Format
+import org.bittrace.ui.components.FormatPicker
 import org.bittrace.ui.P
-import org.bittrace.ui.PzText
-import org.bittrace.ui.Segment
-import org.bittrace.ui.SegmentedToggle
-import org.bittrace.ui.TextInput
+import org.bittrace.ui.components.PzText
+import org.bittrace.ui.components.Segment
+import org.bittrace.ui.components.SegmentedToggle
 import org.bittrace.ui.Typo
 import org.bittrace.ui.topBorder
 
@@ -81,7 +82,6 @@ import org.bittrace.ui.topBorder
 @Composable
 fun AuthTab(state: ApiClientState, oauth: OAuthService) {
     val auth = state.request.auth
-    val scope = rememberCoroutineScope()
     // What an authorisation is doing right now: waiting on a browser, showing a
     // device code, or the error it ended with. Keyed to nothing — a new
     // authorisation replaces it, which is what the one status line means.
@@ -109,26 +109,26 @@ fun AuthTab(state: ApiClientState, oauth: OAuthService) {
         ) {
             when (auth.type) {
                 AUTH_BASIC -> {
-                    Field("Username", auth.username) { v -> edit { it.copy(username = v) } }
-                    Field("Password", auth.password) { v -> edit { it.copy(password = v) } }
-                    Note(
+                    FormTextField("Username", auth.username) { v -> edit { it.copy(username = v) } }
+                    FormTextField("Password", auth.password) { v -> edit { it.copy(password = v) } }
+                    FormNote(
                         "Sent as an Authorization header, base64 of user:password. " +
                             "That is encoding, not encryption — over plain HTTP anything in the path can read it.",
                     )
                 }
 
                 AUTH_BEARER -> {
-                    Field("Scheme", auth.scheme, hint = "Bearer") { v -> edit { it.copy(scheme = v) } }
-                    Field("Token", auth.token, hint = "paste the token") { v -> edit { it.copy(token = v) } }
-                    Note(
+                    FormTextField("Scheme", auth.scheme, placeholder = "Bearer") { v -> edit { it.copy(scheme = v) } }
+                    FormTextField("Token", auth.token, placeholder = "paste the token") { v -> edit { it.copy(token = v) } }
+                    FormNote(
                         "The scheme is the word before the token; leave it empty for a server that wants the " +
                             "token bare. Blank fields are sent blank, so you can see what a server makes of them.",
                     )
                 }
 
                 AUTH_API_KEY -> {
-                    Field("Key", auth.keyName, hint = "X-Api-Key") { v -> edit { it.copy(keyName = v) } }
-                    Field("Value", auth.keyValue) { v -> edit { it.copy(keyValue = v) } }
+                    FormTextField("Key", auth.keyName, placeholder = "X-Api-Key") { v -> edit { it.copy(keyName = v) } }
+                    FormTextField("Value", auth.keyValue) { v -> edit { it.copy(keyValue = v) } }
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         FormLabel("Add to")
                         SegmentedToggle(
@@ -136,27 +136,27 @@ fun AuthTab(state: ApiClientState, oauth: OAuthService) {
                             selected = auth.keyIn,
                         ) { picked -> edit { it.copy(keyIn = picked) } }
                     }
-                    Note(
+                    FormNote(
                         "A key sent in the query is appended to the URL as the request goes out. It stays out of " +
                             "the Params table, so it is never written into the saved request's URL.",
                     )
                 }
 
                 AUTH_OAUTH1 -> {
-                    Field("Consumer key", auth.consumerKey) { v -> edit { it.copy(consumerKey = v) } }
-                    Field("Consumer secret", auth.consumerSecret) { v -> edit { it.copy(consumerSecret = v) } }
-                    Field("Token", auth.oauthToken) { v -> edit { it.copy(oauthToken = v) } }
-                    Field("Token secret", auth.oauthTokenSecret) { v -> edit { it.copy(oauthTokenSecret = v) } }
+                    FormTextField("Consumer key", auth.consumerKey) { v -> edit { it.copy(consumerKey = v) } }
+                    FormTextField("Consumer secret", auth.consumerSecret) { v -> edit { it.copy(consumerSecret = v) } }
+                    FormTextField("Token", auth.oauthToken) { v -> edit { it.copy(oauthToken = v) } }
+                    FormTextField("Token secret", auth.oauthTokenSecret) { v -> edit { it.copy(oauthTokenSecret = v) } }
                     Choice("Signature", SIGNATURE_METHODS, auth.signatureMethod) { v ->
                         edit { it.copy(signatureMethod = v) }
                     }
-                    Field("Realm", auth.realm, hint = "optional") { v -> edit { it.copy(realm = v) } }
+                    FormTextField("Realm", auth.realm, placeholder = "optional") { v -> edit { it.copy(realm = v) } }
                     if (auth.signatureMethod == SIG_RSA_SHA1) {
-                        Field("Private key", auth.privateKeyPath, hint = "PKCS#8 PEM") { v ->
+                        FormTextField("Private key", auth.privateKeyPath, placeholder = "PKCS#8 PEM") { v ->
                             edit { it.copy(privateKeyPath = v) }
                         }
                     }
-                    Note(
+                    FormNote(
                         "Every request is signed as it is sent — there is no token to fetch and nothing to " +
                             "expire. The signature covers the method, the URL, the query and a form body.",
                     )
@@ -167,13 +167,13 @@ fun AuthTab(state: ApiClientState, oauth: OAuthService) {
                     status = newStatus
                 }
 
-                AUTH_NONE -> Note(
+                AUTH_NONE -> FormNote(
                     "This request sends no credentials. An Authorization header typed into the Headers tab still goes out.",
                 )
 
                 // A scheme written by a later build. The value is kept as it is,
                 // so opening the request here and saving it does not erase it.
-                else -> Note(
+                else -> FormNote(
                     "This request uses \"${auth.type}\", which this build does not know how to send. " +
                         "Its settings are preserved; pick a scheme above to send something.",
                 )
@@ -218,51 +218,51 @@ private fun OAuth2Form(
 
     Choice("Grant type", GRANT_TYPES, auth.grantType, ::grantLabel) { v -> edit { it.copy(grantType = v) } }
 
-    Field("Client ID", auth.clientId) { v -> edit { it.copy(clientId = v) } }
-    Field("Client secret", auth.clientSecret) { v -> edit { it.copy(clientSecret = v) } }
+    FormTextField("Client ID", auth.clientId) { v -> edit { it.copy(clientId = v) } }
+    FormTextField("Client secret", auth.clientSecret) { v -> edit { it.copy(clientSecret = v) } }
     CheckRow("Send credentials in the body", auth.credentialsInBody) { on ->
         edit { it.copy(credentialsInBody = on) }
     }
-    Note("Off, they go in an Authorization header, which is what RFC 6749 says clients should prefer.")
+    FormNote("Off, they go in an Authorization header, which is what RFC 6749 says clients should prefer.")
 
     if (auth.grantType == GRANT_AUTH_CODE) {
-        Field("Authorization URL", auth.authUrl) { v -> edit { it.copy(authUrl = v) } }
+        FormTextField("Authorization URL", auth.authUrl) { v -> edit { it.copy(authUrl = v) } }
     }
     if (auth.grantType == GRANT_DEVICE_CODE) {
-        Field("Device auth URL", auth.deviceAuthUrl) { v -> edit { it.copy(deviceAuthUrl = v) } }
+        FormTextField("Device auth URL", auth.deviceAuthUrl) { v -> edit { it.copy(deviceAuthUrl = v) } }
     }
-    Field("Token URL", auth.tokenUrl) { v -> edit { it.copy(tokenUrl = v) } }
+    FormTextField("Token URL", auth.tokenUrl) { v -> edit { it.copy(tokenUrl = v) } }
 
     if (auth.grantType == GRANT_PASSWORD) {
-        Field("Username", auth.username) { v -> edit { it.copy(username = v) } }
-        Field("Password", auth.password) { v -> edit { it.copy(password = v) } }
+        FormTextField("Username", auth.username) { v -> edit { it.copy(username = v) } }
+        FormTextField("Password", auth.password) { v -> edit { it.copy(password = v) } }
     }
 
     if (auth.grantType == GRANT_JWT_BEARER) {
         Choice("Algorithm", JWT_ALGORITHMS, auth.jwtAlgorithm) { v -> edit { it.copy(jwtAlgorithm = v) } }
-        Field("Issuer", auth.jwtIssuer, hint = "iss — the client") { v -> edit { it.copy(jwtIssuer = v) } }
-        Field("Subject", auth.jwtSubject, hint = "sub — defaults to the issuer") { v ->
+        FormTextField("Issuer", auth.jwtIssuer, placeholder = "iss — the client") { v -> edit { it.copy(jwtIssuer = v) } }
+        FormTextField("Subject", auth.jwtSubject, placeholder = "sub — defaults to the issuer") { v ->
             edit { it.copy(jwtSubject = v) }
         }
-        Field("JWT audience", auth.jwtAudience, hint = "aud — defaults to the token URL") { v ->
+        FormTextField("JWT audience", auth.jwtAudience, placeholder = "aud — defaults to the token URL") { v ->
             edit { it.copy(jwtAudience = v) }
         }
-        Field("Key ID", auth.jwtKeyId, hint = "kid — optional") { v -> edit { it.copy(jwtKeyId = v) } }
-        Field("Valid for", auth.jwtValiditySeconds.toString(), hint = "seconds") { v ->
+        FormTextField("Key ID", auth.jwtKeyId, placeholder = "kid — optional") { v -> edit { it.copy(jwtKeyId = v) } }
+        FormTextField("Valid for", auth.jwtValiditySeconds.toString(), placeholder = "seconds") { v ->
             v.toLongOrNull()?.let { seconds -> edit { it.copy(jwtValiditySeconds = seconds) } }
         }
         if (auth.jwtAlgorithm == JWT_RS256) {
-            Field("Private key", auth.privateKeyPath, hint = "PKCS#8 PEM") { v ->
+            FormTextField("Private key", auth.privateKeyPath, placeholder = "PKCS#8 PEM") { v ->
                 edit { it.copy(privateKeyPath = v) }
             }
-            Note("The same PKCS#8 key OAuth 1.0's RSA-SHA1 uses. A PKCS#1 file is refused with the command to convert it.")
+            FormNote("The same PKCS#8 key OAuth 1.0's RSA-SHA1 uses. A PKCS#1 file is refused with the command to convert it.")
         } else {
-            Note("HS256 signs with the client secret above.")
+            FormNote("HS256 signs with the client secret above.")
         }
     }
 
-    Field("Scope", auth.scope, hint = "space separated") { v -> edit { it.copy(scope = v) } }
-    Field("Audience", auth.audience, hint = "optional") { v -> edit { it.copy(audience = v) } }
+    FormTextField("Scope", auth.scope, placeholder = "space separated") { v -> edit { it.copy(scope = v) } }
+    FormTextField("Audience", auth.audience, placeholder = "optional") { v -> edit { it.copy(audience = v) } }
 
     if (auth.grantType == GRANT_AUTH_CODE) {
         CheckRow("Use PKCE", auth.usePkce) { on -> edit { it.copy(usePkce = on) } }
@@ -279,14 +279,14 @@ private fun OAuth2Form(
                 onClick = { copyToClipboard(redirectUri(auth)) },
             )
         }
-        Field("Redirect port", auth.redirectPort.toString()) { v ->
+        FormTextField("Redirect port", auth.redirectPort.toString()) { v ->
             v.toIntOrNull()?.let { port -> edit { it.copy(redirectPort = port) } }
         }
-        Note("Register that exact URL with the provider. BitTrace listens on it only while authorising.")
+        FormNote("Register that exact URL with the provider. BitTrace listens on it only while authorising.")
     }
 
     Row(verticalAlignment = Alignment.CenterVertically) {
-        Spacer(Modifier.width(LABEL_COLUMN))
+        Spacer(Modifier.width(FormStyle.Compact.column))
         if (busy) {
             // While a socket is bound and a browser is open, the useful button
             // is the one that stops it. Nothing else on this row can act until
@@ -313,10 +313,10 @@ private fun OAuth2Form(
         }
     }
 
-    status?.let { Note(it) }
+    status?.let { FormNote(it) }
 
     Row {
-        Spacer(Modifier.width(LABEL_COLUMN))
+        Spacer(Modifier.width(FormStyle.Compact.column))
         PzText(
             when {
                 token == null -> "No token yet — this request is not authorised."
@@ -354,10 +354,10 @@ private fun OAuth2Form(
             )
         }
         if (held.refreshToken.isNotBlank()) {
-            Note("A refresh token came with it, so this one renews itself rather than needing another sign-in.")
+            FormNote("A refresh token came with it, so this one renews itself rather than needing another sign-in.")
         }
     }
-    Note(
+    FormNote(
         "Tokens live in memory only and are never written to a collection, so authorise again after a " +
             "restart. What you type here does persist, as a password does.",
     )
@@ -386,33 +386,10 @@ private fun Choice(
 @Composable
 private fun CheckRow(label: String, checked: Boolean, onChange: (Boolean) -> Unit) {
     Row(verticalAlignment = Alignment.CenterVertically) {
-        Spacer(Modifier.width(LABEL_COLUMN))
+        Spacer(Modifier.width(FormStyle.Compact.column))
         CheckBox(checked, onCheckedChange = onChange)
         Spacer(Modifier.width(8.dp))
         PzText(label, color = P.dim, style = Typo.label, family = P.Ui)
-    }
-}
-
-/** One labelled field. The label column is shared, so the form lines up. */
-@Composable
-private fun Field(label: String, value: String, hint: String = "", onChange: (String) -> Unit) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        FormLabel(label)
-        TextInput(
-            value = value,
-            onValueChange = onChange,
-            placeholder = hint,
-            modifier = Modifier.weight(1f),
-        )
-    }
-}
-
-/** An explanatory line under a scheme's fields, indented to the value column. */
-@Composable
-private fun Note(text: String) {
-    Row {
-        Spacer(Modifier.width(LABEL_COLUMN))
-        PzText(text, color = P.faint, style = Typo.caption, family = P.Ui)
     }
 }
 
@@ -477,28 +454,4 @@ private fun Sent(kind: String, value: String) {
  * The gap is separate rather than baked into the width so that a label which
  * does use the full column still cannot touch the control beside it.
  */
-private val LABEL_WIDTH = 104.dp
 
-private val LABEL_GAP = 10.dp
-
-/** What a row indented past the label has to skip: both of them. */
-private val LABEL_COLUMN = LABEL_WIDTH + LABEL_GAP
-
-/**
- * A form label and the gap that follows it.
- *
- * One composable rather than a width on each call site, because the gap is the
- * part that gets forgotten — and a label butted against its input is the thing
- * that made this worth fixing.
- */
-@Composable
-private fun RowScope.FormLabel(text: String, enabled: Boolean = true) {
-    PzText(
-        text,
-        color = if (enabled) P.dim else P.faint,
-        style = Typo.label,
-        family = P.Ui,
-        modifier = Modifier.width(LABEL_WIDTH),
-    )
-    Spacer(Modifier.width(LABEL_GAP))
-}

@@ -1,5 +1,11 @@
-package org.bittrace.components
+package org.bittrace.ui.layouts.settings
 
+import org.bittrace.ui.components.FormField
+import org.bittrace.ui.components.FormStyle
+import org.bittrace.ui.components.FormTextField
+import org.bittrace.ui.layouts.inspector.components.DEFAULT_COLUMN_KEYS
+import org.bittrace.ui.layouts.inspector.components.columnCatalog
+import androidx.compose.foundation.layout.RowScope
 import org.bittrace.ui.Typo
 import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.background
@@ -38,26 +44,26 @@ import org.bittrace.proxy.CertInfo
 import org.bittrace.proxy.CertTrust
 import org.bittrace.proxy.CertificateAuthority
 import org.bittrace.proxy.ProxyService
-import org.bittrace.ui.CellText
-import org.bittrace.ui.CheckBoxRow
-import org.bittrace.ui.Dot
-import org.bittrace.ui.Dropdown
-import org.bittrace.ui.GhostButton
+import org.bittrace.ui.components.CellText
+import org.bittrace.ui.components.CheckBoxRow
+import org.bittrace.ui.components.Dot
+import org.bittrace.ui.components.Dropdown
+import org.bittrace.ui.components.GhostButton
 import org.bittrace.ui.P
-import org.bittrace.ui.PaneHeader
-import org.bittrace.ui.PrimaryButton
-import org.bittrace.ui.PzText
-import org.bittrace.ui.Segment
-import org.bittrace.ui.SegmentedToggle
-import org.bittrace.ui.TextInput
-import org.bittrace.ui.VScrollbar
+import org.bittrace.ui.components.PaneHeader
+import org.bittrace.ui.components.PrimaryButton
+import org.bittrace.ui.components.PzText
+import org.bittrace.ui.components.Segment
+import org.bittrace.ui.components.SegmentedToggle
+import org.bittrace.ui.components.TextInput
+import org.bittrace.ui.components.VScrollbar
 import org.bittrace.ui.border1
 import org.bittrace.api.HTTP_VERSIONS
 import org.bittrace.api.URL_ENCODINGS
 import org.bittrace.api.httpVersionLabel
 import org.bittrace.api.urlEncodingLabel
 import androidx.compose.ui.text.font.FontWeight
-import org.bittrace.ui.CheckBox
+import org.bittrace.ui.components.CheckBox
 import org.bittrace.ui.leftBorder
 import org.bittrace.ui.rightBorder
 import org.bittrace.ui.topBorder
@@ -66,7 +72,8 @@ import org.jetbrains.jewel.ui.component.SimpleListItem
 /** The settings categories, in sidebar order. */
 private enum class Category(val label: String, val title: String) {
     PROXY("Proxy", "Proxy"),
-    API("API client", "API client defaults"),
+    API("Request Forge", "Request Forge defaults"),
+    GIT("Git", "Git"),
     APPEARANCE("Appearance", "Appearance"),
     COLUMNS("Flow table", "Flow table columns"),
 }
@@ -94,6 +101,7 @@ fun SettingsView(settings: SettingsStore, service: ProxyService, themeManager: T
                 when (active) {
                     Category.PROXY -> ProxyPane(settings, service)
                     Category.API -> ApiClientPane(settings)
+                    Category.GIT -> GitPane(settings)
                     Category.APPEARANCE -> AppearancePane(settings, themeManager)
                     Category.COLUMNS -> ColumnsPane(settings)
                 }
@@ -125,6 +133,42 @@ private val Quips = listOf(
 )
 
 /** The quip that closes out the settings pane, picked once per screen entry. */
+/**
+ * Who commits, and what authenticates a push.
+ *
+ * The identity is optional here because git already has one: leaving these
+ * blank falls back to `~/.gitconfig`, which is where most people have already
+ * set it. Blank in both places refuses the commit rather than inventing an
+ * identity — a history attributed to `bittrace@localhost` is worse than one
+ * that would not start.
+ */
+@Composable
+private fun GitPane(settings: SettingsStore) = Pane(Category.GIT.title) {
+    val current = settings.settings
+
+    GroupLabel("Commit identity")
+    SettingTextField("Name", current.gitAuthorName, "from ~/.gitconfig") { value ->
+        settings.update { it.copy(gitAuthorName = value) }
+    }
+    SettingTextField("Email", current.gitAuthorEmail, "from ~/.gitconfig") { value ->
+        settings.update { it.copy(gitAuthorEmail = value) }
+    }
+    Hint("Leave both blank to use whatever git is already configured with on this machine.")
+
+    GroupLabel("Remote access")
+    SettingTextField("Token", current.gitToken, "personal access token") { value ->
+        settings.update { it.copy(gitToken = value) }
+    }
+    Hint(
+        "Used for HTTPS remotes. SSH remotes use your ~/.ssh keys and agent instead, " +
+            "and need nothing here.",
+    )
+    Hint(
+        "Stored in plain text in settings.json, like everything else on this screen — " +
+            "so scope it to the repositories you actually push to.",
+    )
+}
+
 @Composable
 private fun QuipFooter() {
     val quip = remember { Quips.random() }
@@ -205,15 +249,6 @@ private fun Pane(title: String, content: @Composable ColumnScope.() -> Unit) {
     }
 }
 
-/** A labelled settings row: caption on the left, control on the right. */
-@Composable
-private fun Field(label: String, control: @Composable () -> Unit) {
-    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        PzText(label, color = P.dim, style = Typo.body, family = P.Ui, modifier = Modifier.width(130.dp))
-        control()
-    }
-}
-
 @Composable
 private fun Hint(text: String) = PzText(text, color = P.faint, style = Typo.caption, family = P.Ui)
 
@@ -224,7 +259,7 @@ private fun ProxyPane(settings: SettingsStore, service: ProxyService) = Pane(Cat
     }
     val valid = portText.toIntOrNull()?.let { it in 1..65535 } == true
 
-    Field("Listen port") {
+    SettingField("Listen port") {
         TextInput(
             value = portText,
             onValueChange = { s -> if (s.all { it.isDigit() } && s.length <= 5) portText = s },
@@ -279,14 +314,14 @@ private fun CertificateSection() {
         CertTrust.UNKNOWN -> P.dim to "present, trust state unknown"
     }
 
-    Field("Root certificate") {
+    SettingField("Root certificate") {
         Dot(dotColor, 6)
         Spacer(Modifier.width(7.dp))
         PzText(label, color = P.text, style = Typo.label)
     }
 
     Row(verticalAlignment = Alignment.CenterVertically) {
-        Spacer(Modifier.width(130.dp))
+        Spacer(Modifier.width(FormStyle.Roomy.column))
         val installable = current?.trust == CertTrust.NOT_TRUSTED && CertificateAuthority.canInstall && !busy
         // No tooltip here: Jewel's Tooltip is stable, but it exposes Compose
         // Foundation's experimental TooltipPlacement, and this migration takes
@@ -332,13 +367,13 @@ private fun ApiClientPane(settings: SettingsStore) = Pane(Category.API.title) {
     val current = settings.settings
 
     GroupLabel("Connection")
-    Field("HTTP version") {
+    SettingField("HTTP version") {
         SegmentedToggle(
             segments = HTTP_VERSIONS.map { Segment(it, httpVersionLabel(it)) },
             selected = current.apiHttpVersion,
         ) { picked -> settings.update { it.copy(apiHttpVersion = picked) } }
     }
-    Field("Timeout") {
+    SettingField("Timeout") {
         NumberField(current.apiTimeoutMs.toString()) { typed ->
             typed.toLongOrNull()?.let { value -> settings.update { it.copy(apiTimeoutMs = value) } }
         }
@@ -347,18 +382,18 @@ private fun ApiClientPane(settings: SettingsStore) = Pane(Category.API.title) {
     }
 
     GroupLabel("Redirects")
-    Field("Follow redirects") {
+    SettingField("Follow redirects") {
         CheckBox(current.apiFollowRedirects) { on -> settings.update { it.copy(apiFollowRedirects = on) } }
     }
-    Hint("Off by default: an API client should show what the endpoint answered, not where it pointed.")
-    Field("Maximum") {
+    Hint("Off by default: the Forge should show what the endpoint answered, not where it pointed.")
+    SettingField("Maximum") {
         NumberField(current.apiMaxRedirects.toString(), enabled = current.apiFollowRedirects) { typed ->
             typed.toIntOrNull()?.let { value -> settings.update { it.copy(apiMaxRedirects = value) } }
         }
     }
 
     GroupLabel("URL")
-    Field("Query encoding") {
+    SettingField("Query encoding") {
         SegmentedToggle(
             segments = URL_ENCODINGS.map { Segment(it, urlEncodingLabel(it)) },
             selected = current.apiUrlEncoding,
@@ -368,9 +403,22 @@ private fun ApiClientPane(settings: SettingsStore) = Pane(Category.API.title) {
 }
 
 /** A heading inside a pane, for the groups a settings pane divides into. */
+/** Wide enough for a token, which is the longest thing anybody types here. */
+private val FIELD_WIDTH = 320.dp
+
 @Composable
 private fun GroupLabel(text: String) =
     PzText(text, color = P.text, style = Typo.label, family = P.Ui, weight = FontWeight.SemiBold)
+
+/** A bound text row at this screen's label width and field width. */
+@Composable
+private fun SettingTextField(label: String, value: String, placeholder: String, onChange: (String) -> Unit) =
+    FormTextField(label, value, placeholder, FormStyle.Roomy, width = FIELD_WIDTH, onChange = onChange)
+
+/** A settings row at this screen's label width. */
+@Composable
+private fun SettingField(label: String, control: @Composable RowScope.() -> Unit) =
+    FormField(label, FormStyle.Roomy, control = control)
 
 /** A digits-only field. Ignores anything that is not a number rather than clearing. */
 @Composable
@@ -386,11 +434,8 @@ private fun NumberField(value: String, enabled: Boolean = true, onChange: (Strin
 @Composable
 private fun AppearancePane(settings: SettingsStore, themeManager: ThemeManager) =
     Pane(Category.APPEARANCE.title) {
-        Field("Theme") { ThemeToggle(settings, themeManager) }
-        Field("Flow rows") { TableModeToggle(settings) }
-        Hint("Detailed rows add a timing ribbon under each flow. Applies next time you open Traffic.")
-
-        Field("Inspector") { InspectorDockToggle(settings) }
+        SettingField("Theme") { ThemeToggle(settings, themeManager) }
+        SettingField("Inspector") { InspectorDockToggle(settings) }
         Hint(
             "Horizontal puts the inspector beside the flow table, with request above response. " +
                 "Vertical puts it underneath, side by side. Applies immediately.",
@@ -423,18 +468,6 @@ private fun ThemeToggle(settings: SettingsStore, themeManager: ThemeManager) {
     ) { name ->
         themes.firstOrNull { it.name == name }?.let { themeManager.setActiveThemeId(it.id, settings) }
     }
-}
-
-/** Compact vs detailed flow rows; the table reads this once when it is built. */
-@Composable
-private fun TableModeToggle(settings: SettingsStore) {
-    // Parsed by the same rule the table reads it with, so the control and the
-    // table can never disagree about what an unrecognised setting means.
-    val active = if (TableMode.from(settings.settings.tableMode) == TableMode.DETAILED) "detailed" else "compact"
-    SegmentedToggle(
-        segments = listOf(Segment("compact", "Compact"), Segment("detailed", "Detailed")),
-        selected = active,
-    ) { id -> settings.update { s -> s.copy(tableMode = id) } }
 }
 
 /** Where the inspector docks — and, with it, how its two panes are arranged. */

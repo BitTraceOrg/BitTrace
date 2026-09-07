@@ -1,5 +1,30 @@
-package org.bittrace.components
+package org.bittrace.ui.layouts.forge
 
+import org.bittrace.ui.bytesStr
+import org.bittrace.ui.dayClockOf
+import org.bittrace.ui.layouts.forge.components.AuthTab
+import org.bittrace.ui.layouts.forge.components.CollectionTree
+import org.bittrace.ui.layouts.forge.components.CommitDialog
+import org.bittrace.ui.layouts.forge.components.GitPrompts
+import org.bittrace.ui.layouts.forge.components.KvEditor
+import org.bittrace.ui.layouts.forge.components.MethodPicker
+import org.bittrace.ui.layouts.forge.components.NewBranchDialog
+import org.bittrace.ui.layouts.forge.components.PendingChangesDialog
+import org.bittrace.ui.layouts.forge.components.PendingGit
+import org.bittrace.ui.layouts.forge.components.ProjectToolbar
+import org.bittrace.ui.layouts.forge.components.PublishDialog
+import org.bittrace.ui.layouts.forge.components.RequestHistoryTab
+import org.bittrace.ui.layouts.forge.components.RequestSettingsTab
+import org.bittrace.ui.layouts.forge.components.TreeBadge
+import org.bittrace.ui.layouts.forge.components.TreeMenuItem
+import org.bittrace.ui.layouts.forge.components.UnsavedChangesDialog
+import org.bittrace.ui.layouts.forge.components.VariablesPane
+import org.bittrace.ui.layouts.forge.components.gitItems
+import org.bittrace.ui.layouts.forge.components.methodColor
+import org.bittrace.ui.layouts.inspector.Inspector
+import org.bittrace.api.walk
+import org.bittrace.ui.components.DirtyDot
+import org.bittrace.ui.components.EmptyState
 import org.bittrace.ui.Typo
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -50,10 +75,14 @@ import org.bittrace.plugin.collection.CollectionTargetKind
 import kotlinx.coroutines.withContext
 import org.bittrace.api.ApiClientState
 import org.bittrace.api.RequestTab
+import org.bittrace.api.ProjectVariables
+import org.bittrace.api.VariablesNode
+import org.bittrace.api.VariablesTab
+import org.bittrace.api.EditorTab
 import org.bittrace.api.CollectionStore
 import org.bittrace.api.oauth.OAuthService
 import org.bittrace.api.ImportReport
-import org.bittrace.api.HTTP_METHODS
+import org.bittrace.data.HTTP_METHODS
 import org.bittrace.api.HistoryEntry
 import org.bittrace.api.HistoryStore
 import org.bittrace.api.KeyValue
@@ -61,26 +90,27 @@ import org.bittrace.api.paramsOf
 import org.bittrace.api.resolve
 import org.bittrace.api.urlWithParams
 import org.bittrace.data.SessionStore
+import org.bittrace.git.GitStore
 import org.bittrace.data.horizontalLayout
 import org.bittrace.data.SettingsStore
 import org.bittrace.plugin.format.BodyFormatter
 import org.bittrace.proxy.ProxyService
-import org.bittrace.ui.CellText
-import org.bittrace.ui.Format
-import org.bittrace.ui.FormatPicker
-import org.bittrace.ui.CodeEditor
-import org.bittrace.ui.EDITABLE_LIMIT
+import org.bittrace.ui.components.CellText
+import org.bittrace.ui.components.Format
+import org.bittrace.ui.components.FormatPicker
+import org.bittrace.ui.components.CodeEditor
+import org.bittrace.ui.components.EDITABLE_LIMIT
 import org.bittrace.ui.FileDialogs
-import org.bittrace.ui.GhostButton
+import org.bittrace.ui.components.GhostButton
 import org.bittrace.ui.P
-import org.bittrace.ui.PaneHeader
-import org.bittrace.ui.PillTabs
-import org.bittrace.ui.PrimaryButton
-import org.bittrace.ui.PzText
-import org.bittrace.ui.SplitPane
-import org.bittrace.ui.TextInput
-import org.bittrace.ui.VScrollbar
-import org.bittrace.ui.VerticalSplitter
+import org.bittrace.ui.components.PaneHeader
+import org.bittrace.ui.components.PillTabs
+import org.bittrace.ui.components.PrimaryButton
+import org.bittrace.ui.components.PzText
+import org.bittrace.ui.components.SplitPane
+import org.bittrace.ui.components.TextInput
+import org.bittrace.ui.components.VScrollbar
+import org.bittrace.ui.components.VerticalSplitter
 import org.bittrace.ui.bottomBorder
 import org.bittrace.ui.revealed
 import org.bittrace.ui.rightBorder
@@ -109,10 +139,22 @@ fun ApiView(
     service: ProxyService,
     settings: SettingsStore,
     formatters: List<BodyFormatter>,
+    /** Per-project repository state, for the tree's branch chips and git menu. */
+    git: GitStore,
     /** Plugins contributing items to the collections tree's context menu. */
     collectionActions: List<CollectionActionPlugin>,
     /** Owner for the file picker; the API menu and rail both route through App. */
     window: ComposeWindow,
+    /**
+     * Where the notice strip's messages also go.
+     *
+     * The strip holds one line and the next action overwrites it, so a failed
+     * save or a rename that was refused left no record at all once you clicked
+     * anything else. Everything the strip says now goes to the log too, at the
+     * level the site chooses — failures as errors, confirmations as info, so the
+     * log reads as what happened rather than only what went wrong.
+     */
+    onLog: (String, String) -> Unit = { _, _ -> },
 ) {
     // One service for the view, holding the token store the client state owns.
     // Built here rather than in the state because it needs the proxy's port and
@@ -122,11 +164,48 @@ fun ApiView(
     }
 
     var tab by remember { mutableStateOf("Params") }
-    var sideTab by remember { mutableStateOf("Collections") }
+    var sideTab by remember { mutableStateOf("Projects") }
     var notice by remember { mutableStateOf<String?>(null) }
+
+    /**
+     * Says something once on the strip and once in the log.
+     *
+     * A single funnel rather than a logging call beside each assignment: there
+     * are sixteen of those, and the one that gets forgotten is always the
+     * failure path nobody exercises.
+     */
+    fun report(message: String?, level: String = "error") {
+        notice = message
+        if (message != null) onLog(level, message)
+    }
+
+    // The tree renders this as a strip of its own, which is a state and not an
+    // event — so it is logged from an effect rather than from composition,
+    // where it would be written again on every frame.
+    LaunchedEffect(collections.error) {
+        collections.error?.let { onLog("error", "collections could not be read: $it") }
+    }
     // The tab waiting on an answer to "save before closing?".
-    var pendingClose by remember { mutableStateOf<RequestTab?>(null) }
+    var pendingClose by remember { mutableStateOf<EditorTab?>(null) }
     var selectedPath by remember { mutableStateOf<Path?>(null) }
+
+    // An unsaved draft resolves its `{{name}}`s against the project it would be
+    // saved into, which is this selection — the same path `save` reads below.
+    // Kept in step here rather than passed to `send`, because the menu bar and
+    // the Auth tab start sends and authorisations of their own and would each
+    // have had to remember to supply it.
+    LaunchedEffect(selectedPath) { state.draftHome = selectedPath }
+    // Which git dialog is open, and on which project. Nullable paths rather than
+    // booleans, so a dialog cannot outlive knowing what it applies to.
+    var branchFor by remember { mutableStateOf<Path?>(null) }
+    var commitFor by remember { mutableStateOf<Path?>(null) }
+    var publishFor by remember { mutableStateOf<Path?>(null) }
+    var commitChanges by remember { mutableStateOf<List<org.bittrace.git.FileChange>>(emptyList()) }
+    // The operation waiting on unsaved tabs being saved.
+    var pendingGit by remember { mutableStateOf<PendingGit?>(null) }
+    // The tree column has its own scope further down, declared where the menu
+    // items are built. Git work outlives that lambda, so it gets one here.
+    val viewScope = rememberCoroutineScope()
 
     // Walking the collections folder touches the disk, so it happens off the
     // UI thread — on first entry and whenever the view is returned to.
@@ -135,6 +214,106 @@ fun ApiView(
             collections.reload()
             history.load()
         }
+        // Only after the reload: `adoptLegacyLayout` may still move whole
+        // collections, and a repo created before that runs would record the
+        // move as a delete-and-add rather than as the layout it found.
+        git.adopt(collections.tree.map { it.path })
+    }
+
+    /**
+     * Refuses an operation that would rewrite files a tab is still editing.
+     *
+     * Letting git overwrite them and reloading afterwards would discard the
+     * edits silently, and a save-then-continue is one click either way — so the
+     * refusal costs nothing and the alternative costs work.
+     */
+    fun guarded(project: Path, action: String, run: () -> Unit) {
+        val dirty = state.dirtyTabsUnder(project)
+        if (dirty.isEmpty()) run() else pendingGit = PendingGit(project, action, dirty.map { it.title }, run)
+    }
+
+    /** Puts open tabs back in step with what git just wrote. */
+    fun reconcile(project: Path, branch: String) {
+        viewScope.launch {
+            withContext(Dispatchers.IO) { collections.reload() }
+            val report = state.reconcile(project, branch) { path ->
+                collections.tree.walk()
+                    .filterIsInstance<RequestNode>()
+                    .firstOrNull { it.path == path }
+                    ?.let(collections::read)
+                    ?: Result.failure(IllegalStateException("no longer in the tree"))
+            }
+            if (selectedPath?.let { !Files.exists(it) } == true) selectedPath = null
+            val detail = report.summary()
+            // Only the reconcile half goes to the log. The checkout itself is
+            // already logged by the git store, and two "Switched to main" lines
+            // from two sources is one line of news and one of noise.
+            notice = if (detail.isBlank()) "Switched to $branch." else "Switched to $branch — $detail."
+            if (detail.isNotBlank()) onLog("info", "open tabs after $branch: $detail")
+        }
+    }
+
+    /**
+     * The selected node, for the toolbar.
+     *
+     * Variables rows are excluded on purpose. The toolbar enables Delete for
+     * anything non-null, and a variables file is not the user's to delete —
+     * it is regenerated the moment the project is read again. Reporting the row
+     * as "nothing selected" is what the toolbar already did before the walk was
+     * shared, when it reached variables by not looking for them.
+     */
+    val selectedNode = remember(collections.tree, selectedPath) {
+        selectedPath?.let { path ->
+            collections.tree.walk().firstOrNull { it.path == path && it !is VariablesNode }
+        }
+    }
+
+    /**
+     * Makes whatever belongs one level under [node].
+     *
+     * The same rule the context menu follows, so the toolbar button and the
+     * menu entry cannot disagree about what "new" means where you are standing.
+     */
+    fun createUnder(node: Node?) {
+        viewScope.launch {
+            val made = withContext(Dispatchers.IO) {
+                when (node) {
+                    is ProjectNode -> collections.createNamedCollection(node.path)
+                    is CollectionNode -> collections.createNamedRequest(node.path)
+                    is RequestNode -> node.path.parent?.let { collections.createNamedRequest(it) }
+                    else -> collections.createNamedProject()
+                }
+            }
+            made?.onSuccess { path -> selectedPath = path; report("Created ${path.fileName}", "info") }
+                ?.onFailure { report("Could not create that: ${it.message}") }
+        }
+    }
+
+    fun deleteNode(node: Node) {
+        collections.delete(node)
+            .onSuccess {
+                if (state.openPath == node.path) state.open(state.request, null)
+                if (selectedPath == node.path) selectedPath = null
+                report("Moved '${node.name}' to the .trash folder.", "info")
+            }
+            .onFailure { report(it.message ?: "Delete failed.") }
+    }
+
+    /** Switches to [branch], guarded and then reconciled. */
+    fun switchTo(project: Path, branch: String) {
+        guarded(project, "Switching branch") {
+            git.run(project, "Checkout") { checkout(project, branch).map { "Switched to ${it.branch}." } }
+            reconcile(project, branch.substringAfter("origin/", branch))
+        }
+    }
+
+    val prompts = remember(state, collections) {
+        GitPrompts(
+            newBranch = { project -> branchFor = project },
+            commit = { project -> commitFor = project },
+            publish = { project -> publishFor = project },
+            guarded = ::guarded,
+        )
     }
 
     val treeWidth = settings.settings.apiTreeWidthDp.dp
@@ -145,10 +324,10 @@ fun ApiView(
     val horizontal = settings.settings.horizontalLayout
 
     Row(Modifier.fillMaxSize().background(P.bg)) {
-        // --- collections / history ---
+        // --- projects / history ---
         Column(Modifier.width(treeWidth).fillMaxHeight().background(P.panel).rightBorder(P.line)) {
             PaneHeader {
-                PillTabs(listOf("Collections", "History"), sideTab) { sideTab = it }
+                PillTabs(listOf("Projects", "History"), sideTab) { sideTab = it }
             }
 
             if (sideTab == "History") {
@@ -180,10 +359,19 @@ fun ApiView(
                     }
 
                     override fun notify(message: String) {
-                        notice = message
+                        report(message, "info")
                     }
                 }
             }
+
+            ProjectToolbar(
+                selected = selectedNode,
+                collections = collections,
+                git = git,
+                prompts = prompts,
+                onNew = { node -> createUnder(node) },
+                onDelete = { node -> deleteNode(node) },
+            )
 
             CollectionTree(
                 nodes = collections.tree,
@@ -192,10 +380,38 @@ fun ApiView(
                 onOpen = { node ->
                     collections.read(node)
                         .onSuccess { state.open(it, node.path); selectedPath = node.path; notice = null }
-                        .onFailure { notice = "Could not read ${node.name}: ${it.message}" }
+                        .onFailure { report("Could not read ${node.name}: ${it.message}") }
+                },
+                onOpenVariables = { node ->
+                    collections.projectOf(node.path)?.let { project ->
+                        state.openVariables(project)
+                        selectedPath = node.path
+                        notice = null
+                    }
                 },
                 onSelectFolder = { selectedPath = it.path },
+                onBadge = { node ->
+                    // Only projects carry one, and only once the repo is known.
+                    (node as? ProjectNode)?.let { project ->
+                        val state = git.stateOf(project.path)
+                        state.label?.let { label ->
+                            TreeBadge(
+                                value = label,
+                                // A detached HEAD has no branch to be selected,
+                                // so it is a readout until one is created.
+                                options = if (state.detached) emptyList() else state.branches,
+                                dot = !state.clean,
+                                onSelect = { picked -> switchTo(project.path, picked) },
+                            )
+                        }
+                    }
+                },
                 onMenuItems = { node ->
+                    // Before `targetOf`, which has no kind for this and no
+                    // business gaining one: a fourth `CollectionTargetKind`
+                    // would be a source-incompatible change for every plugin
+                    // with an exhaustive `when` over it.
+                    if (node is VariablesNode) return@CollectionTree emptyList()
                     val target = targetOf(node)
                     val plugins = collectionActions
                         .flatMap { plugin -> plugin.actionsFor(target) }
@@ -207,9 +423,10 @@ fun ApiView(
                             TreeMenuItem(action.label, action.enabled) { action.perform(actionContext) }
                         }
                     // The host's own come first, above whatever plugins add.
-                    val host = createItems(node, collections, scope, { notice = it }) { made ->
+                    val host = createItems(node, collections, scope, ::report) { made ->
                         selectedPath = made
-                    } + archiveItems(node, collections, window, scope) { notice = it }
+                    } + archiveItems(node, collections, window, scope, ::report) +
+                        gitItems(node, git, prompts)
                     host + plugins
                 },
                 onRename = { node, name ->
@@ -223,17 +440,9 @@ fun ApiView(
                             if (selectedPath == node.path) selectedPath = moved
                             notice = null
                         }
-                        .onFailure { notice = it.message ?: "Rename failed." }
+                        .onFailure { report(it.message ?: "Rename failed.") }
                 },
-                onDelete = { node ->
-                    collections.delete(node)
-                        .onSuccess {
-                            if (state.openPath == node.path) state.open(state.request, null)
-                            if (selectedPath == node.path) selectedPath = null
-                            notice = "Moved '${node.name}' to the collections .trash folder."
-                        }
-                        .onFailure { notice = it.message ?: "Delete failed." }
-                },
+                onDelete = { node -> deleteNode(node) },
             )
             collections.error?.let {
                 Box(Modifier.fillMaxWidth().padding(10.dp)) {
@@ -262,44 +471,62 @@ fun ApiView(
                     state.close(tab)
                 }
             }
-            RequestBar(state, service, collections, selectedPath) { notice = it }
+            // The one branch the compiler cannot force, because the pane below
+            // was unconditional before there was anything else to show. Made
+            // exhaustive over the sealed tab so a third kind fails here rather
+            // than silently rendering a request builder over it.
+            val open = state.active
+            if (open is VariablesTab) {
+                VariablesPane(open) { report(saveVariables(open)) }
+                return@Column
+            }
+
+            RequestBar(state, service, collections, selectedPath, ::report)
 
             // --- request builder ---
             val builder: @Composable (Modifier) -> Unit = { paneModifier ->
                 Column(paneModifier) {
-                    // The builder is a pane like any other, so it gets a pane
-                    // header: title first, then its sections. The send result
-                    // belongs to the response and lives in that header instead.
-                    PaneHeader(title = "Request") {
-                        PillTabs(listOf("Params", "Headers", "Cookies", "Body", "Auth", "Settings"), tab, Modifier.weight(1f)) { tab = it }
-                    }
-
-                    Box(Modifier.weight(1f).fillMaxWidth()) {
-                        when (tab) {
-                            "Params" -> KvTab(state.request.params, "param") { rows ->
-                                // Editing a param rewrites the query in place, so
-                                // the URL above shows what will actually be sent.
+                    // One list, so the strip and the content cannot disagree.
+                    // The switch used to be a `when` on the tab name with the
+                    // body editor as its `else`, which meant a tab added after
+                    // it silently rendered the body — a hazard its own comment
+                    // recorded rather than removed. Pairing each name with what
+                    // it draws makes an unnamed tab impossible to write.
+                    val pages: List<Pair<String, @Composable () -> Unit>> = listOf(
+                        "Params" to {
+                            KvTab(state.request.params, "param") { rows ->
                                 // Encoded the way this request will be sent, so
                                 // the URL above shows what actually goes out —
                                 // switching the encoding rewrites it in place.
                                 val encoding = state.request.settings.resolve(settings.settings).urlEncoding
                                 state.edit { it.copy(params = rows, url = urlWithParams(it.url, rows, encoding)) }
                             }
-
-                            "Headers" -> KvTab(state.request.headers, "header") { rows ->
+                        },
+                        "Headers" to {
+                            KvTab(state.request.headers, "header") { rows ->
                                 state.edit { it.copy(headers = rows) }
                             }
-
-                            "Cookies" -> KvTab(state.request.cookies, "cookie") { rows ->
+                        },
+                        "Cookies" to {
+                            KvTab(state.request.cookies, "cookie") { rows ->
                                 state.edit { it.copy(cookies = rows) }
                             }
+                        },
+                        "Body" to { BodyTab(state, window, ::report) },
+                        "Auth" to { AuthTab(state, oauth) },
+                        "Settings" to { RequestSettingsTab(state, settings.settings) },
+                        "History" to { RequestHistoryTab(state, collections, git) },
+                    )
 
-                            "Auth" -> AuthTab(state, oauth)
+                    // The builder is a pane like any other, so it gets a pane
+                    // header: title first, then its sections. The send result
+                    // belongs to the response and lives in that header instead.
+                    PaneHeader(title = "Request") {
+                        PillTabs(pages.map { it.first }, tab, Modifier.weight(1f)) { tab = it }
+                    }
 
-                            "Settings" -> RequestSettingsTab(state, settings.settings)
-
-                            else -> BodyTab(state, window) { notice = it }
-                        }
+                    Box(Modifier.weight(1f).fillMaxWidth()) {
+                        pages.firstOrNull { it.first == tab }?.second?.invoke()
                     }
 
                     notice?.let {
@@ -360,7 +587,7 @@ fun ApiView(
             name = tab.title,
             onSave = {
                 val failure = save(state, collections, selectedPath)
-                notice = failure
+                report(failure)
                 // A failed save leaves the tab open — losing the edits because
                 // the write did not land is the one outcome nobody wants.
                 if (failure == null) {
@@ -370,6 +597,92 @@ fun ApiView(
             },
             onDiscard = { state.close(tab); pendingClose = null },
             onCancel = { pendingClose = null },
+        )
+    }
+
+    branchFor?.let { project ->
+        NewBranchDialog(
+            current = git.stateOf(project).branch,
+            onDismiss = { branchFor = null },
+            onCreate = { name ->
+                branchFor = null
+                guarded(project, "Switching branch") {
+                    git.run(project, "New branch") {
+                        createBranch(project, name).map { "Created and switched to ${it.name}." }
+                    }
+                    reconcile(project, name)
+                }
+            },
+        )
+    }
+
+    commitFor?.let { project ->
+        CommitDialog(
+            project = project.fileName.toString(),
+            changes = commitChanges,
+            onDismiss = { commitFor = null },
+            onCommit = { paths, message ->
+                commitFor = null
+                git.run(project, "Commit") {
+                    commit(project, paths, message).map { "Committed ${paths.size} file(s) as ${it.short}." }
+                }
+            },
+        )
+    }
+
+    // Loaded when the dialog opens rather than held live: a working-tree walk
+    // on every frame the tree is visible is not a thing to do for a dialog that
+    // is usually shut.
+    LaunchedEffect(commitFor) {
+        val project = commitFor ?: return@LaunchedEffect
+        commitChanges = git.service.status(project).getOrDefault(org.bittrace.git.GitStatus(emptyList())).changes
+    }
+
+    publishFor?.let { project ->
+        PublishDialog(
+            project = project.fileName.toString(),
+            branch = git.stateOf(project).branch,
+            onDismiss = { publishFor = null },
+            onPublish = { url ->
+                publishFor = null
+                git.run(project, "Publish") {
+                    // Adding the remote and pushing are one act from where the
+                    // user is standing, so the remote is rolled back if the push
+                    // behind it fails. Otherwise a mistyped URL leaves the
+                    // project pointing at nothing, and — because the menu offers
+                    // Publish only while there is no remote — no way to correct
+                    // it from the app at all.
+                    addRemote(project, url).fold(
+                        onSuccess = { remote ->
+                            push(project, setUpstream = true)
+                                .map { "Published to ${remote.url}." }
+                                .onFailure {
+                                    removeRemote(project) }
+                        },
+                        onFailure = {
+                            Result.failure(it) },
+                    )
+                }
+            },
+        )
+    }
+
+    pendingGit?.let { pending ->
+        PendingChangesDialog(
+            action = pending.action,
+            names = pending.names,
+            onDismiss = { pendingGit = null },
+            onSaveAll = {
+                val failure = saveAll(state, collections, pending.project)
+                report(failure)
+                // Only proceed if every save landed. Running the git operation
+                // after a partial save is exactly the overwrite this dialog
+                // exists to prevent.
+                if (failure == null) {
+                    pendingGit = null
+                    pending.run()
+                }
+            },
         )
     }
 }
@@ -407,15 +720,16 @@ private fun createItems(
     node: Node,
     collections: CollectionStore,
     scope: CoroutineScope,
-    onNotice: (String) -> Unit,
+    /** Message first, then level, so the common `report(text)` reads plainly. */
+    onNotice: (String, String) -> Unit,
     onCreated: (Path) -> Unit,
 ): List<TreeMenuItem> = when (node) {
     is ProjectNode -> listOf(
         TreeMenuItem("New collection") {
             scope.launch {
                 withContext(Dispatchers.IO) { collections.createNamedCollection(node.path) }
-                    .onSuccess { made -> onCreated(made); onNotice("Created ${made.fileName} in ${node.name}") }
-                    .onFailure { onNotice("Could not create a collection: ${it.message}") }
+                    .onSuccess { made -> onCreated(made); onNotice("Created ${made.fileName} in ${node.name}", "info") }
+                    .onFailure { onNotice("Could not create a collection: ${it.message}", "error") }
             }
         },
     )
@@ -424,8 +738,8 @@ private fun createItems(
         TreeMenuItem("New request") {
             scope.launch {
                 withContext(Dispatchers.IO) { collections.createNamedRequest(node.path) }
-                    .onSuccess { made -> onCreated(made); onNotice("Created ${made.fileName} in ${node.name}") }
-                    .onFailure { onNotice("Could not create a request: ${it.message}") }
+                    .onSuccess { made -> onCreated(made); onNotice("Created ${made.fileName} in ${node.name}", "info") }
+                    .onFailure { onNotice("Could not create a request: ${it.message}", "error") }
             }
         },
     )
@@ -447,7 +761,7 @@ private fun archiveItems(
     collections: CollectionStore,
     window: ComposeWindow,
     scope: CoroutineScope,
-    onNotice: (String) -> Unit,
+    onNotice: (String, String) -> Unit,
 ): List<TreeMenuItem> {
     if (node is RequestNode) return emptyList()
 
@@ -459,20 +773,23 @@ private fun archiveItems(
                 val result = withContext(Dispatchers.IO) { collections.exportNode(node, target) }
                 result
                     .onSuccess { files ->
-                        onNotice("Exported ${node.name} — $files ${plural(files, "request")} to ${target.fileName}")
+                        onNotice(
+                            "Exported ${node.name} — $files requests to ${target.fileName}",
+                            "info",
+                        )
                         // After the notice, so a file manager that takes a
                         // moment to appear does not delay the confirmation.
                         FileDialogs.revealInFolder(target)
                     }
-                    .onFailure { onNotice("Could not export ${node.name}: ${it.message}") }
+                    .onFailure { onNotice("Could not export ${node.name}: ${it.message}", "error") }
             }
         },
         TreeMenuItem("Import…") {
             val archive = FileDialogs.openZip(window) ?: return@TreeMenuItem
             scope.launch {
                 withContext(Dispatchers.IO) { collections.importInto(node, archive) }
-                    .onSuccess { report -> onNotice(importNotice(report, kind)) }
-                    .onFailure { onNotice("Could not import ${archive.fileName}: ${it.message}") }
+                    .onSuccess { report -> onNotice(importNotice(report, kind), "info") }
+                    .onFailure { onNotice("Could not import ${archive.fileName}: ${it.message}", "error") }
             }
         },
     )
@@ -494,14 +811,12 @@ private fun importNotice(report: ImportReport, kind: String): String {
         report.written.isEmpty() -> "That zip is empty."
         skipped > 0 ->
             "Imported ${report.written.size} of ${report.written.size + skipped} — " +
-                "$skipped skipped, ${report.files} ${plural(report.files, "request")} written"
+                "$skipped skipped, ${report.files} requests written"
 
         else -> "Imported ${report.written.joinToString(", ")} — " +
-            "${report.files} ${plural(report.files, "request")}"
+            "${report.files} requests"
     }
 }
-
-private fun plural(count: Int, word: String): String = if (count == 1) word else "${word}s"
 
 /**
  * The tree's own node, as the plugin API describes it.
@@ -511,6 +826,11 @@ private fun plural(count: Int, word: String): String = if (count == 1) word else
  * two names are the parent folders and nothing has to be searched for them.
  */
 private fun targetOf(node: Node): CollectionTarget = when (node) {
+    // Unreachable: `onMenuItems` returns before calling this for a variables
+    // row. Spelled out rather than left to an `else`, so adding another node
+    // kind fails here instead of quietly becoming a project target.
+    is VariablesNode -> error("A variables row contributes no plugin actions.")
+
     is RequestNode -> CollectionTarget(
         kind = CollectionTargetKind.REQUEST,
         name = node.name,
@@ -548,7 +868,7 @@ private fun nameAbove(path: Path, levels: Int): String =
  * cancelled and no response is overwritten.
  */
 @Composable
-private fun RequestTabs(state: ApiClientState, onClose: (RequestTab) -> Unit) {
+private fun RequestTabs(state: ApiClientState, onClose: (EditorTab) -> Unit) {
     Row(
         Modifier.fillMaxWidth().background(P.chrome).bottomBorder(P.line),
         verticalAlignment = Alignment.CenterVertically,
@@ -567,9 +887,12 @@ private fun RequestTabs(state: ApiClientState, onClose: (RequestTab) -> Unit) {
                     onClick = { state.focus(tab) },
                     content = { _ ->
                         Row(verticalAlignment = Alignment.CenterVertically) {
+                            // The method for a request; the syntax it teaches for
+                            // the variables table, which has no method to show.
+                            val lead = (tab as? RequestTab)?.request?.method
                             PzText(
-                                tab.request.method,
-                                color = methodColor(tab.request.method),
+                                lead ?: "{{ }}",
+                                color = lead?.let(::methodColor) ?: P.key,
                                 style = Typo.micro, family = P.Ui, softWrap = false,
                             )
                             Spacer(Modifier.width(6.dp))
@@ -581,7 +904,7 @@ private fun RequestTabs(state: ApiClientState, onClose: (RequestTab) -> Unit) {
                             )
                             if (tab.dirty) {
                                 Spacer(Modifier.width(6.dp))
-                                PzText("\u25CF", color = P.warn, style = Typo.micro, family = P.Ui)
+                                DirtyDot()
                             }
                         }
                     },
@@ -616,9 +939,7 @@ private fun HistoryList(
     Box(modifier) {
         Column(Modifier.fillMaxSize().verticalScroll(scroll)) {
             if (entries.isEmpty()) {
-                Box(Modifier.fillMaxWidth().padding(12.dp)) {
-                    PzText("Nothing sent yet", color = P.faint, style = Typo.label, family = P.Ui)
-                }
+                EmptyState("Nothing sent yet")
             }
             entries.forEach { entry ->
                 HistoryRow(entry, onOpen = { onOpen(entry) }, onRemove = { onRemove(entry) })
@@ -680,7 +1001,7 @@ private fun HistoryRow(entry: HistoryEntry, onOpen: () -> Unit, onRemove: () -> 
  * usually the point; anything else stays on disk and is streamed at send time.
  */
 @Composable
-private fun BodyTab(state: ApiClientState, window: ComposeWindow, onNotice: (String?) -> Unit) {
+private fun BodyTab(state: ApiClientState, window: ComposeWindow, onNotice: (String?, String) -> Unit) {
     val body = state.request.body
     // Not persisted, unlike the inspector's splits: this one is a preference
     // about one tab of one request, and remembering it across restarts would be
@@ -707,9 +1028,9 @@ private fun BodyTab(state: ApiClientState, window: ComposeWindow, onNotice: (Str
             GhostButton(if (body.fromFile) "Remove file" else "File…") {
                 if (body.fromFile) {
                     state.edit { it.copy(body = it.body.copy(filePath = "")) }
-                    onNotice(null)
+                    onNotice(null, "error")
                 } else {
-                    onNotice(attach(state, window))
+                    onNotice(attach(state, window), "error")
                 }
             }
         }
@@ -896,7 +1217,7 @@ private fun RequestBar(
     service: ProxyService,
     collections: CollectionStore,
     selectedPath: Path?,
-    onNotice: (String?) -> Unit,
+    onNotice: (String?, String) -> Unit,
 ) {
     Row(
         Modifier.fillMaxWidth().background(P.panel).bottomBorder(P.line)
@@ -922,12 +1243,11 @@ private fun RequestBar(
             modifier = Modifier.weight(1f),
         )
 
-
         if (state.busy) {
             GhostButton("Cancel") { state.cancel() }
         } else {
             PrimaryButton("Send", enabled = state.request.url.isNotBlank()) {
-                onNotice(null)
+                onNotice(null, "error")
                 state.send()
             }
         }
@@ -935,12 +1255,48 @@ private fun RequestBar(
         // No dirty marker on the button — the request's own tab already carries
         // one, and the button's enabled state says the same thing again.
         GhostButton("Save", enabled = state.dirty || state.openPath == null) {
-            onNotice(save(state, collections, selectedPath))
+            onNotice(save(state, collections, selectedPath), "error")
         }
     }
 }
 
 /** Saves over the open file, or into the selected collection when new. */
+/**
+ * Writes every unsaved tab under [project], stopping at the first failure.
+ *
+ * Stopping matters: the caller runs a checkout once this returns null, and a
+ * checkout after a half-finished save is precisely the overwrite the guard
+ * exists to prevent. A partial save leaves the rest dirty, so the dialog simply
+ * comes back with fewer names in it.
+ */
+private fun saveAll(state: ApiClientState, collections: CollectionStore, project: Path): String? {
+    state.dirtyTabsUnder(project).forEach { tab ->
+        val failure = when (tab) {
+            is VariablesTab -> saveVariables(tab)
+            is RequestTab -> {
+                val path = tab.openPath
+                    ?: return "${tab.title} has no file yet — save it into a collection first."
+                collections.save(path, tab.request).exceptionOrNull()?.message
+            }
+        }
+        if (failure != null) return "Could not save ${tab.title}: $failure"
+        tab.dirty = false
+    }
+    return null
+}
+
+/**
+ * Writes a variables table.
+ *
+ * Deliberately not routed through `CollectionStore.save`, which is shaped for a
+ * request and now refuses any path that is not one — a project's variables are
+ * a different file with different rules, and pretending otherwise is how a
+ * placeholder ends up written over something that matters.
+ */
+private fun saveVariables(tab: VariablesTab): String? =
+    runCatching { ProjectVariables.write(tab.project, tab.rows) }
+        .fold({ tab.dirty = false; null }, { it.message ?: "Save failed." })
+
 private fun save(state: ApiClientState, collections: CollectionStore, selectedPath: Path?): String? {
     val existing = state.openPath
     if (existing != null) {

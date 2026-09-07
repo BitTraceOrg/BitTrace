@@ -1,4 +1,4 @@
-package org.bittrace.components
+package org.bittrace.ui.layouts.forge.components
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -9,11 +9,11 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
-import org.bittrace.ui.AppDialog
-import org.bittrace.ui.GhostButton
+import org.bittrace.ui.components.AppDialog
+import org.bittrace.ui.components.GhostButton
 import org.bittrace.ui.P
-import org.bittrace.ui.PrimaryButton
-import org.bittrace.ui.PzText
+import org.bittrace.ui.components.PrimaryButton
+import org.bittrace.ui.components.PzText
 import org.bittrace.ui.Typo
 
 /**

@@ -1,5 +1,8 @@
-package org.bittrace.components
+package org.bittrace.ui.layouts.forge.components
 
+import org.bittrace.ui.components.FormLabel
+import org.bittrace.ui.components.FormNote
+import org.bittrace.ui.components.PaneHeader
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -8,7 +11,6 @@ import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
@@ -17,7 +19,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import org.bittrace.api.ApiClientState
 import org.bittrace.api.HTTP_VERSIONS
@@ -27,15 +28,13 @@ import org.bittrace.api.httpVersionLabel
 import org.bittrace.api.resolve
 import org.bittrace.api.urlEncodingLabel
 import org.bittrace.data.Settings
-import org.bittrace.ui.CheckBox
+import org.bittrace.ui.components.CheckBox
 import org.bittrace.ui.P
-import org.bittrace.ui.PzText
-import org.bittrace.ui.Segment
-import org.bittrace.ui.SegmentedToggle
-import org.bittrace.ui.TextInput
+import org.bittrace.ui.components.PzText
+import org.bittrace.ui.components.Segment
+import org.bittrace.ui.components.SegmentedToggle
+import org.bittrace.ui.components.TextInput
 import org.bittrace.ui.Typo
-import org.bittrace.ui.bottomBorder
-import org.bittrace.ui.topBorder
 import org.jetbrains.jewel.ui.component.IconActionButton
 import org.jetbrains.jewel.ui.icons.AllIconsKeys
 
@@ -75,7 +74,7 @@ fun RequestSettingsTab(state: ApiClientState, defaults: Settings) {
                 selected = effective.httpVersion,
             ) { picked -> edit { it.copy(httpVersion = picked) } }
         }
-        Note("Auto lets the JDK negotiate. Naming HTTP/2 makes it an upgrade the server has to accept.")
+        FormNote(inset = true, text = "Auto lets the JDK negotiate. Naming HTTP/2 makes it an upgrade the server has to accept.")
 
         SettingRow(
             label = "Timeout",
@@ -88,7 +87,7 @@ fun RequestSettingsTab(state: ApiClientState, defaults: Settings) {
             Spacer(Modifier.width(6.dp))
             PzText("ms", color = P.faint, style = Typo.caption, family = P.Ui)
         }
-        Note("The deadline for the whole exchange. Connecting has its own fixed 15 s limit.")
+        FormNote(inset = true, text = "The deadline for the whole exchange. Connecting has its own fixed 15 s limit.")
 
         Group("Redirects")
 
@@ -99,7 +98,7 @@ fun RequestSettingsTab(state: ApiClientState, defaults: Settings) {
         ) {
             CheckBox(effective.followRedirects) { on -> edit { it.copy(followRedirects = on) } }
         }
-        Note("Off, the response you see is the redirect itself. On, each hop is still captured as its own flow.")
+        FormNote(inset = true, text = "Off, the response you see is the redirect itself. On, each hop is still captured as its own flow.")
 
         SettingRow(
             label = "Maximum",
@@ -112,7 +111,7 @@ fun RequestSettingsTab(state: ApiClientState, defaults: Settings) {
                 enabled = effective.followRedirects,
             ) { typed -> edit { it.copy(maxRedirects = typed?.toIntOrNull()) } }
         }
-        Note("Reaching the limit returns the last response rather than an error — a redirect loop is a finding.")
+        FormNote(inset = true, text = "Reaching the limit returns the last response rather than an error — a redirect loop is a finding.")
 
         Group("URL")
 
@@ -126,7 +125,7 @@ fun RequestSettingsTab(state: ApiClientState, defaults: Settings) {
                 selected = effective.urlEncoding,
             ) { picked -> edit { it.copy(urlEncoding = picked) } }
         }
-        Note(
+        FormNote(inset = true, text = 
             "Applies to the params table, not to the URL you typed — that is sent as written. " +
                 "WHATWG sends a space as +, RFC 3986 as %20, None sends both verbatim.",
         )
@@ -143,17 +142,8 @@ fun RequestSettingsTab(state: ApiClientState, defaults: Settings) {
  * pixel line.
  */
 @Composable
-private fun Group(title: String, first: Boolean = false) {
-    Row(
-        Modifier.fillMaxWidth().height(26.dp).background(P.head)
-            .then(if (first) Modifier else Modifier.topBorder(P.line))
-            .bottomBorder(P.line)
-            .padding(horizontal = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        PzText(title, color = P.dim, style = Typo.label, family = P.Ui, weight = FontWeight.SemiBold)
-    }
-}
+private fun Group(title: String, first: Boolean = false) =
+    PaneHeader(title = title, topRule = !first)
 
 /**
  * One setting: its name, its control, and whether it is this request's or the
@@ -197,7 +187,7 @@ private fun SettingRow(
  * "I have no opinion", which is exactly what inheriting is.
  */
 @Composable
-private fun RowScope.NumberInput(value: String, enabled: Boolean = true, onChange: (String?) -> Unit) {
+private fun NumberInput(value: String, enabled: Boolean = true, onChange: (String?) -> Unit) {
     TextInput(
         value = value,
         onValueChange = { typed ->
@@ -208,15 +198,6 @@ private fun RowScope.NumberInput(value: String, enabled: Boolean = true, onChang
     )
 }
 
-/** An explanatory line under a row, indented to the control column. */
-@Composable
-private fun Note(text: String) {
-    Row(Modifier.padding(start = 10.dp, end = 10.dp, bottom = 8.dp)) {
-        Spacer(Modifier.width(LABEL_COLUMN))
-        PzText(text, color = P.faint, style = Typo.caption, family = P.Ui)
-    }
-}
-
 /**
  * The label column, and the gap after it.
  *
@@ -225,25 +206,6 @@ private fun Note(text: String) {
  * separate from the width so a label that fills the column still cannot touch
  * the control beside it.
  */
-private val LABEL_WIDTH = 104.dp
-
-private val LABEL_GAP = 10.dp
-
-/** What a row indented past the label has to skip: both of them. */
-private val LABEL_COLUMN = LABEL_WIDTH + LABEL_GAP
-
-/** A form label and the gap that follows it — the gap is the part that gets forgotten. */
-@Composable
-private fun RowScope.FormLabel(text: String, enabled: Boolean = true) {
-    PzText(
-        text,
-        color = if (enabled) P.dim else P.faint,
-        style = Typo.label,
-        family = P.Ui,
-        modifier = Modifier.width(LABEL_WIDTH),
-    )
-    Spacer(Modifier.width(LABEL_GAP))
-}
 
 /** Enough to read as secondary without becoming unreadable. */
 private const val INHERITED_ALPHA = 0.55f

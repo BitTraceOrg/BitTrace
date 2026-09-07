@@ -1,5 +1,7 @@
-package org.bittrace.components
+package org.bittrace.ui.layouts.home
 
+import org.bittrace.ui.bytesStr
+import org.bittrace.ui.ChipShape
 import androidx.compose.foundation.layout.height
 import org.bittrace.data.ActivityStore
 import java.time.LocalDate
@@ -29,12 +31,12 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import org.bittrace.data.SessionStore
 import org.bittrace.proxy.ProxyService
-import org.bittrace.ui.Dot
+import org.bittrace.ui.components.Dot
 import org.bittrace.ui.P
-import org.bittrace.ui.PrimaryButton
-import org.bittrace.ui.PzText
-import org.bittrace.ui.Segment
-import org.bittrace.ui.SegmentedToggle
+import org.bittrace.ui.components.PrimaryButton
+import org.bittrace.ui.components.PzText
+import org.bittrace.ui.components.Segment
+import org.bittrace.ui.components.SegmentedToggle
 import org.bittrace.ui.border1
 import org.bittrace.ui.bottomBorder
 
@@ -68,8 +70,8 @@ fun HomeView(
     onOpenCapture: () -> Unit,
 ) {
     val rows = store.rows
-    val failed = rows.count { r -> r.response?.let { it.error || it.response.status >= 400 } == true }
-    val succeeded = rows.count { r -> r.response?.let { !it.error && it.response.status < 400 } == true }
+    val failed = rows.count { it.failed == true }
+    val succeeded = rows.count { it.failed == false }
     val totalSize = rows.sumOf { (it.response?.response?.bodySize ?: 0L).coerceAtLeast(0L) }
     // Drives both the toggle and how many days the heatmap draws.
     var rangeDays by remember { mutableStateOf(30) }
@@ -103,7 +105,10 @@ fun HomeView(
                 Spacer(Modifier.width(8.dp))
                 PzText(if (service.isRunning) "Proxy running" else "Proxy stopped", color = P.text, style = Typo.body, family = P.Ui)
                 Spacer(Modifier.weight(1f))
-                Box(Modifier.background(P.bg).border1(P.line).padding(horizontal = 8.dp, vertical = 3.dp)) {
+                Box(
+                    Modifier.background(P.bg, ChipShape).border1(P.line, shape = ChipShape)
+                        .padding(horizontal = 8.dp, vertical = 3.dp),
+                ) {
                     PzText("localhost:$port", color = P.dim, style = Typo.label)
                 }
             }

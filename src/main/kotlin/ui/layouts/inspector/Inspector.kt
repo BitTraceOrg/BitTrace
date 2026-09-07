@@ -1,13 +1,21 @@
-package org.bittrace.components
+package org.bittrace.ui.layouts.inspector
 
+import org.bittrace.ui.bytesStr
+import org.bittrace.ui.components.isFormBody
+import org.bittrace.ui.components.parseForm
+import org.bittrace.ui.hostPath
+import org.bittrace.ui.layouts.inspector.components.Phase
+import org.bittrace.ui.layouts.inspector.components.phasesOf
+import org.bittrace.ui.startStr
+import org.bittrace.ui.statusOf
+import org.bittrace.ui.tlsText
+import androidx.compose.foundation.layout.RowScope
 import org.bittrace.ui.Typo
 import androidx.compose.foundation.ContextMenuItem
 import androidx.compose.foundation.ContextMenuRepresentation
 import androidx.compose.foundation.ContextMenuState
 import androidx.compose.foundation.LocalContextMenuRepresentation
-import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.background
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -18,12 +26,10 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
@@ -36,8 +42,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.text.AnnotatedString
-import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
@@ -48,22 +52,19 @@ import org.bittrace.data.TrafficRow
 import org.bittrace.plugin.format.BodyFormatter
 import org.bittrace.plugin.format.FormattedBody
 import org.bittrace.proxy.BodySide
-import org.bittrace.ui.CellText
-import org.bittrace.ui.Format
-import org.bittrace.ui.FormatPicker
-import org.bittrace.ui.HorizontalSplitter
+import org.bittrace.ui.components.CellText
+import org.bittrace.ui.components.Format
+import org.bittrace.ui.components.FormatPicker
+import org.bittrace.ui.components.HorizontalSplitter
 import org.bittrace.ui.P
-import org.bittrace.ui.PaneHeader
-import org.bittrace.ui.PillTabs
-import org.bittrace.ui.PzText
-import org.bittrace.ui.Ribbon
-import org.bittrace.ui.RibbonSlice
-import org.bittrace.ui.CodeView
-import org.bittrace.ui.VScrollbar
-import org.jetbrains.jewel.ui.component.IconActionButton
-import org.jetbrains.jewel.ui.icons.AllIconsKeys
-import org.bittrace.ui.copyToClipboard
-import org.bittrace.ui.VerticalSplitter
+import org.bittrace.ui.components.PaneHeader
+import org.bittrace.ui.components.PillTabs
+import org.bittrace.ui.components.PzText
+import org.bittrace.ui.components.Ribbon
+import org.bittrace.ui.components.RibbonSlice
+import org.bittrace.ui.components.CodeView
+import org.bittrace.ui.components.VScrollbar
+import org.bittrace.ui.components.VerticalSplitter
 import org.bittrace.ui.bottomBorder
 import org.bittrace.ui.rightBorder
 import org.bittrace.ui.topBorder
@@ -189,7 +190,7 @@ private fun Pane(
 
         // Fixed pane header (URL/status line + MetaGrid), adapting to the side;
         // hidden on the BODY tab to give the body maximum height.
-        if (tab != "Body") PaneHeader(row, side)
+        if (tab != "Body") SideHeader(row, side)
 
         // One chip per available formatter, defaulting to the one that claims
         // this flow's content type (falling back to RAW).
@@ -262,35 +263,49 @@ private fun Pane(
 
 // --- pane header (adapts to side + available info) ---
 
+/**
+ * The line at the top of a half, whichever half it is.
+ *
+ * The two branches below had the same modifier chain written out twice, twenty
+ * lines apart inside one function — close enough to look deliberate and far
+ * enough apart to drift. Only what goes *in* the row differs by side.
+ */
 @Composable
-private fun PaneHeader(row: TrafficRow, side: BodySide) {
+private fun TitleRow(content: @Composable RowScope.() -> Unit) = Row(
+    Modifier.fillMaxWidth().background(P.bg).bottomBorder(P.line)
+        .padding(horizontal = 10.dp, vertical = 6.dp),
+    verticalAlignment = Alignment.CenterVertically,
+    content = content,
+)
+
+@Composable
+private fun SideHeader(row: TrafficRow, side: BodySide) {
     if (side == BodySide.REQUEST) {
         val r = row.request.request
         val (host, path) = hostPath(r.url)
-        Row(
-            Modifier.fillMaxWidth().background(P.bg).bottomBorder(P.line).padding(horizontal = 10.dp, vertical = 6.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
+        val scheme = schemeOf(r.url)
+        TitleRow {
             PzText(r.method, color = P.info, style = Typo.body, weight = FontWeight.SemiBold)
             Spacer(Modifier.width(6.dp))
-            PzText("${schemeOf(r.url)}://", color = P.dim, style = Typo.body)
+            // A CONNECT target is an authority, not a URL, so there is no
+            // scheme to show — and inventing one would name a protocol the
+            // tunnel has not carried yet.
+            if (scheme.isNotEmpty()) PzText("$scheme://", color = P.dim, style = Typo.body)
             CellText("$host$path", color = P.text, style = Typo.body)
         }
         MetaGrid(
-            listOf(
-                Triple("Version", r.httpVersion, P.text),
-                Triple("Remote", remoteOf(row).ifBlank { "—" }, P.text),
-                Triple("Header bytes", bytesStr(r.headersSize), P.text),
-                Triple("TLS", tlsText(row), if (tlsText(row) == "—") P.faint else P.ok),
-            ),
+            buildList {
+                add(Triple("Version", r.httpVersion, P.text))
+                add(Triple("Remote", remoteOf(row).ifBlank { "—" }, P.text))
+                if (row.isConnect) add(Triple("Client", row.clientAddress.ifBlank { "—" }, P.text))
+                add(Triple("Header bytes", bytesStr(r.headersSize), P.text))
+                add(Triple("TLS", tlsText(row), if (tlsText(row) == "—") P.faint else P.ok))
+            },
         )
     } else {
         val resp = row.response
         val (_, sColor) = statusOf(row)
-        Row(
-            Modifier.fillMaxWidth().background(P.bg).bottomBorder(P.line).padding(horizontal = 10.dp, vertical = 6.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
+        TitleRow {
             if (resp == null) {
                 PzText("pending", color = P.dim, style = Typo.body)
             } else {
@@ -397,7 +412,6 @@ private fun ResponseOverview(row: TrafficRow) {
 
 @Composable
 private fun PhaseRibbon(row: TrafficRow) {
-    // Same phase set and colours the table's compact ribbon uses.
     val phases = phasesOf(row)
     if (phases.isEmpty()) return
     val total = (row.response?.time ?: phases.sumOf { it.ms }).toLong()
@@ -825,8 +839,6 @@ private fun KvRow(
 private fun Mono(text: String, contentType: String) {
     CodeView(text, Modifier.fillMaxSize(), contentType)
 }
-
-
 
 @Composable
 private fun Pad(text: String) {

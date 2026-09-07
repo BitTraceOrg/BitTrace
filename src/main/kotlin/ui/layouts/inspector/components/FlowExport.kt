@@ -1,4 +1,4 @@
-package org.bittrace.components
+package org.bittrace.ui.layouts.inspector.components
 
 import com.fasterxml.jackson.core.JsonFactory
 import com.fasterxml.jackson.core.JsonGenerator

@@ -251,7 +251,13 @@ val graphQlCompletions: CompletionSource = { context ->
     }
 }
 
-/** GraphQL highlighting and completion, as one extension. */
+/**
+ * GraphQL highlighting and completion, as one extension.
+ *
+ * **Call `languageFor`, not this.** Every call defines a new stream language,
+ * which costs a permanent entry in the language module's global node type
+ * table. This exists to be cached, once.
+ */
 fun graphql(): LanguageSupport = LanguageSupport(
     language = StreamLanguage.define(graphQlParser),
     support = autocompletion(CompletionConfig(override = listOf(graphQlCompletions))),

@@ -134,15 +134,53 @@ fun editorAppearance(): Extension = extensionListOf(
  */
 fun languageFor(contentType: String): LanguageSupport {
     val type = contentType.lowercase()
-    return when {
-        type.contains("graphql") -> graphql()
-        type.contains("json") -> json()
-        type.contains("html") -> html()
-        type.contains("xml") -> xml()
-        type.contains("typescript") -> javascript(typescript = true)
-        type.contains("javascript") || type.contains("ecmascript") -> javascript()
-        else -> plainText()
+    val kind = when {
+        type.contains("graphql") -> Lang.GRAPHQL
+        type.contains("json") -> Lang.JSON
+        type.contains("html") -> Lang.HTML
+        type.contains("xml") -> Lang.XML
+        type.contains("typescript") -> Lang.TYPESCRIPT
+        type.contains("javascript") || type.contains("ecmascript") -> Lang.JAVASCRIPT
+        else -> Lang.PLAIN
     }
+    return languages.computeIfAbsent(kind, ::build)
+}
+
+private enum class Lang { GRAPHQL, JSON, HTML, XML, TYPESCRIPT, JAVASCRIPT, PLAIN }
+
+/**
+ * One [LanguageSupport] per language, for the life of the process.
+ *
+ * **This cache is a correctness fix, not a speed one.** `StreamLanguage.define`
+ * appends a node type to a table in the language module that is process-global
+ * and never pruned, so every call to [plainText] or [graphql] left an entry
+ * behind permanently — and each entry retains the language it came from, since
+ * the type's props hold the language facet and an indent lambda closing over it.
+ * Nothing releases them, so the heap only goes one way.
+ *
+ * That mattered here because [languageFor] is called straight from the editor
+ * composables, which re-key whenever the body tab changes: paging Body → Raw →
+ * Hex → Body on one flow defined a new language each time. A body no formatter
+ * claims, and the whole Hex tab, land on `PLAIN` — which is exactly the path
+ * that leaks.
+ *
+ * Sharing is safe, and is how CodeMirror is meant to be used: a `LanguageSupport`
+ * describes a language rather than holding a parse, and each editor state
+ * derives its own syntax tree from it.
+ *
+ * Lazily filled rather than built up front — defining all seven at startup would
+ * pay for languages a given session may never open.
+ */
+private val languages = java.util.concurrent.ConcurrentHashMap<Lang, LanguageSupport>()
+
+private fun build(kind: Lang): LanguageSupport = when (kind) {
+    Lang.GRAPHQL -> graphql()
+    Lang.JSON -> json()
+    Lang.HTML -> html()
+    Lang.XML -> xml()
+    Lang.TYPESCRIPT -> javascript(typescript = true)
+    Lang.JAVASCRIPT -> javascript()
+    Lang.PLAIN -> plainText()
 }
 
 /**
@@ -154,6 +192,10 @@ fun languageFor(contentType: String): LanguageSupport {
  * because going without one would also mean going without the gutter, the search
  * panel and the rest of `basicSetup`, which plain text wants as much as anything
  * else does.
+ *
+ * **Call [languageFor], not this.** Every call defines a new stream language,
+ * and defining one costs a permanent entry in the language module's global node
+ * type table — see the note on [languages]. This exists to be cached, once.
  */
 fun plainText(): LanguageSupport = LanguageSupport(StreamLanguage.define(plainTextParser))
 

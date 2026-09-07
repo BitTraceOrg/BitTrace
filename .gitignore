@@ -43,3 +43,9 @@ bin/
 
 ### Mac OS ###
 .DS_Store
+
+### BitTrace ###
+# Design exploration: mockups, JSX sketches, screenshots. Not shipped.
+design/
+# IntelliJ run configurations are per-developer.
+.run/

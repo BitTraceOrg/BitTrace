@@ -1,5 +1,9 @@
-package org.bittrace.ui
+package org.bittrace.ui.components
 
+import org.bittrace.ui.P
+import org.bittrace.ui.Typo
+import org.bittrace.ui.bottomBorder
+import org.bittrace.ui.topBorder
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
@@ -33,11 +37,19 @@ import androidx.compose.ui.unit.dp
 fun PaneHeader(
     modifier: Modifier = Modifier,
     title: String? = null,
+    /**
+     * A rule above as well as below — for a heading that divides one group of
+     * settings from the previous one rather than opening a pane. The caller
+     * passes `false` for the first heading, which has nothing to divide from.
+     */
+    topRule: Boolean = false,
     content: @Composable RowScope.() -> Unit = {},
 ) {
     Row(
         modifier.fillMaxWidth().heightIn(min = PANE_HEADER_HEIGHT)
-            .background(P.head).bottomBorder(P.line)
+            .background(P.head)
+            .then(if (topRule) Modifier.topBorder(P.line) else Modifier)
+            .bottomBorder(P.line)
             .padding(horizontal = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {

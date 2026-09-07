@@ -1,12 +1,12 @@
-package org.bittrace.components
+package org.bittrace.ui.components
 
+import org.bittrace.ui.clockOf
 import org.bittrace.ui.Typo
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
@@ -19,15 +19,8 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import org.bittrace.data.LogRecord
 import org.bittrace.data.LogStore
-import org.bittrace.ui.CellText
-import org.bittrace.ui.DataGrid
-import org.bittrace.ui.GridColumn
-import org.bittrace.ui.GridStyle
-import org.bittrace.ui.HorizontalSplitter
+
 import org.bittrace.ui.P
-import org.bittrace.ui.PaneHeader
-import org.bittrace.ui.Segment
-import org.bittrace.ui.SegmentedToggle
 
 private fun levelColor(level: String): Color = when (level.lowercase()) {
     "info" -> P.info
@@ -68,7 +61,8 @@ private val LogGridStyle: GridStyle
 /**
  * Floating log panel (DESIGN.md §6.11) — a bottom-docked overlay holding a grid
  * of log lines from every source the app has: the proxy sidecar, session
- * import/export, the plugin loader. Toggled from the status-bar LOGS button
+ * import/export, the plugin loader, the Forge and its git layer. Toggled from
+ * the status-bar LOGS button
  * (which also closes it).
  * The TIME/LEVEL/SOURCE columns are resizable; MESSAGE fills the rest. Follows
  * the tail as new lines arrive and can be filtered by level.

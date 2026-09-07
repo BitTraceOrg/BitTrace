@@ -1,5 +1,10 @@
-package org.bittrace.ui
+package org.bittrace.ui.components
 
+import org.bittrace.ui.ChipShape
+import org.bittrace.ui.P
+import org.bittrace.ui.Typo
+import org.bittrace.ui.bottomBorder
+import org.bittrace.ui.revealed
 import kotlin.math.roundToInt
 import androidx.compose.ui.window.PopupPositionProvider
 import androidx.compose.ui.unit.LayoutDirection
@@ -13,6 +18,7 @@ import androidx.compose.ui.input.pointer.isCtrlPressed
 import androidx.compose.ui.input.pointer.isSecondaryPressed
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
@@ -44,7 +50,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshots.SnapshotStateList
 import androidx.compose.runtime.snapshots.SnapshotStateMap
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
@@ -60,6 +69,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
 import java.awt.Cursor
+import org.jetbrains.jewel.ui.component.Icon
 import org.jetbrains.jewel.ui.component.IconActionButton
 import org.jetbrains.jewel.ui.icons.AllIconsKeys
 
@@ -82,6 +92,43 @@ private const val MIN_COL_PX = 28f
 private val FACET_LIST_HEIGHT = 200.dp
 
 /**
+ * Tick lists the grid renders but does not own.
+ *
+ * The flow table's Code, Method and Type funnels and the overview band's facet
+ * columns are the same three sets of ticks. Held separately they were two
+ * filters that happened to agree until somebody used either one: ticking 4xx in
+ * a header left the band showing nothing selected, and the grid then applied the
+ * two independently, so the row count answered to a query neither panel had
+ * drawn. This is the seam that makes them one — the band keeps the state, the
+ * header edits it, and the grid stops filtering on it entirely because the owner
+ * already has.
+ */
+class GridFacetBinding(
+    /** Column keys this binding covers. */
+    val keys: Set<String>,
+    val selected: (String) -> Set<String>,
+    val toggle: (String, String) -> Unit,
+    val clear: (String) -> Unit,
+)
+
+/** Whether [key]'s header should read as filtered, wherever its ticks live. */
+private fun columnIsFiltered(
+    key: String,
+    filters: SnapshotStateMap<String, ColumnFilter>?,
+    bound: GridFacetBinding?,
+): Boolean {
+    return filters?.get(key)?.isActive == true || bound != null && key in bound.keys && bound.selected(key).isNotEmpty()
+}
+
+/** The popup floats over the grid, so it is shaped like a card rather than a cell. */
+private val POPUP_SHAPE = RoundedCornerShape(6.dp)
+
+/** Its inputs and comparison chips, at the radius the rest of the app uses. */
+
+/** The controls that sit inside a field, sized to fit its 24dp without touching the frame. */
+private val TRAILING = 18.dp
+
+/**
  * One grid column over rows of type [T].
  *
  * [weight] means one of two things, selected by [fixed]: a *flexible* column
@@ -102,12 +149,15 @@ class GridColumn<T>(
     val filterable: Boolean = true,
     val presets: List<String> = emptyList(),
     /**
-     * A fixed tick list, for a column whose values are a closed set.
+     * The tick list, for a column whose values are a closed set.
      *
-     * Facets derived from the data can only offer what has already arrived,
-     * which is the wrong shape for a set that is known in advance: you cannot
-     * filter for 5xx before the first one shows up, and by then you are looking
-     * at it. When this is non-empty it replaces the derived list.
+     * Only a closed set gets one. A list built from the data can offer solely
+     * what has already arrived — so you could not filter for 5xx before the
+     * first one showed up, and by then you were looking at it — and on an open
+     * set like host or URL it grows without bound, turning the popup into a
+     * scrolling directory you have to search before you can filter with it.
+     * Open sets get the text field, which is the right tool for a value you have
+     * to describe rather than pick.
      */
     val facets: List<String> = emptyList(),
     /**
@@ -146,17 +196,35 @@ class ColumnFilter(
     val op: String = OP_NONE,
     /** What to compare against, as typed. Kept as text so a half-typed number is not a filter. */
     val operand: String = "",
+    /**
+     * Whether the typed text excludes rather than includes.
+     *
+     * "Everything except the CDN" is a question the grid could not previously
+     * ask at all: you could tick the hosts you wanted, but only after listing
+     * them, and the one you wanted gone was usually the one with hundreds of
+     * rows. Negation applies to the text alone — ticks stay positive, since a
+     * tick list that sometimes meant "not these" would need to say which.
+     */
+    val negated: Boolean = false,
 ) {
     val isActive: Boolean
         get() = text.isNotBlank() || selected.isNotEmpty() || (op != OP_NONE && operand.isNotBlank())
 
-    fun withText(value: String) = ColumnFilter(value, selected, op, operand)
+    fun withText(value: String) = ColumnFilter(value, selected, op, operand, negated)
 
-    fun withComparison(newOp: String, newOperand: String) = ColumnFilter(text, selected, newOp, newOperand)
+    fun withNegated(value: Boolean) = ColumnFilter(text, selected, op, operand, value)
+
+    fun withComparison(newOp: String, newOperand: String) =
+        ColumnFilter(text, selected, newOp, newOperand, negated)
 
     /** Ticks or unticks one facet. */
     fun toggle(facet: String) =
-        ColumnFilter(text, if (facet in selected) selected - facet else selected + facet, op, operand)
+        ColumnFilter(text, if (facet in selected) selected - facet else selected + facet, op, operand, negated)
+
+    /** Whether [value] passes the typed text, negation included. */
+    fun textOk(value: String): Boolean {
+        return text.isBlank() || value.contains(text, ignoreCase = true) != negated
+    }
 
     /** Whether [value] passes the comparison, or true when there is none to make. */
     fun comparisonOk(value: Long?): Boolean {
@@ -242,7 +310,7 @@ fun <T> applyGridFilters(rows: List<T>, cols: List<GridColumn<T>>, filters: Map<
     if (active.isEmpty()) return rows
     return rows.filter { row ->
         active.all { (column, filter) ->
-            val textOk = filter.text.isBlank() || column.value(row).contains(filter.text, ignoreCase = true)
+            val textOk = filter.textOk(column.value(row))
             val numberOk = column.numeric?.let { filter.comparisonOk(it(row)) } ?: true
             val facetOk = filter.selected.isEmpty() || run {
                 // Without a facet the ticked values are matched against the
@@ -255,15 +323,6 @@ fun <T> applyGridFilters(rows: List<T>, cols: List<GridColumn<T>>, filters: Map<
     }
 }
 
-/** The distinct facets present in [rows], sorted, for a column's tick list. */
-internal fun <T> facetsOf(rows: List<T>, column: GridColumn<T>): List<String> {
-    // A declared list wins: it is the closed set, and deriving one from the data
-    // would only ever be a subset of it.
-    if (column.facets.isNotEmpty()) return column.facets
-    val facet = column.facet ?: return emptyList()
-    return rows.mapTo(sortedSetOf()) { facet(it) }.filter { it.isNotBlank() }
-}
-
 /**
  * Renders [rows] under [columns].
  *
@@ -274,12 +333,6 @@ internal fun <T> facetsOf(rows: List<T>, column: GridColumn<T>): List<String> {
  * @param reorderable when true, header cells can be dragged to reorder columns.
  * @param followTail when true, the body sticks to the newest row as rows arrive.
  * @param selectableText when true, row text is selectable/copyable.
- * @param rowDetail when non-null, each row gets a second line below it rendering
- *   this content — the grid's "detailed" mode. Pass null (the default) for one
- *   line per row. Decide this once at the call site rather than per row: it is a
- *   mode, not a per-row property.
- * @param rowDetailIndent how many leading columns the detail line starts past,
- *   so it can align with a column edge instead of the grid edge.
  */
 @Composable
 fun <T, M> DataGrid(
@@ -294,7 +347,6 @@ fun <T, M> DataGrid(
      * unfiltered list — otherwise ticking one host removes every other host
      * from the list, leaving no way to tick a second.
      */
-    filterSource: List<T> = rows,
     selectedKey: Any? = null,
     onSelect: ((T) -> Unit)? = null,
     /**
@@ -311,8 +363,6 @@ fun <T, M> DataGrid(
     followTail: Boolean = false,
     selectableText: Boolean = false,
     style: GridStyle = GridStyle(),
-    rowDetail: (@Composable (T) -> Unit)? = null,
-    rowDetailIndent: Int = 0,
     markers: GridMarkers<M>? = null,
     /**
      * Right-click actions for a row, if the caller has any. Declared as menu
@@ -320,6 +370,24 @@ fun <T, M> DataGrid(
      * looks and the caller only says what is in it.
      */
     rowMenu: (MenuScope.(T) -> Unit)? = null,
+    /**
+     * What to show instead of rows when there are none.
+     *
+     * A slot rather than a string because only the caller knows *why* the grid
+     * is empty — nothing captured yet and everything filtered out look identical
+     * from in here, and they need opposite advice.
+     */
+    empty: (@Composable () -> Unit)? = null,
+    /**
+     * Columns whose tick list is owned by somebody else.
+     *
+     * Keyed by column key. When a column appears here its popup reads and writes
+     * this instead of its own [ColumnFilter], so a header funnel and whatever
+     * else edits the same set stay one state rather than two that agree until
+     * you touch either. The grid never applies these itself — the owner already
+     * did, which is what makes it the owner.
+     */
+    boundFacets: GridFacetBinding? = null,
 ) {
     val listState = rememberLazyListState()
     if (followTail) {
@@ -332,19 +400,20 @@ fun <T, M> DataGrid(
     }
 
     Column(modifier) {
-        GridHeader(columns, filters, filterSource, reorderable, style)
+        GridHeader(columns, filters, boundFacets, reorderable, style)
 
         // The scrollbar overlays the rows' right edge, below the header.
         Box(Modifier.weight(1f).fillMaxWidth()) {
             val body: @Composable () -> Unit = {
+                if (rows.isEmpty() && empty != null) {
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { empty() }
+                }
                 LazyColumn(Modifier.fillMaxSize(), state = listState) {
                     markers?.leading?.forEach { marker ->
                         item(key = markers.key(marker)) { markers.content(marker) }
                     }
                     itemsIndexed(rows, key = { _, it -> key(it) }) { index, row ->
                         val selected = key(row) == selectedKey
-                        // Striping alternates on the row, not the pair: a detail
-                        // line belongs to the row above it and shares its tone.
                         GridRow(
                             columns, row, selected, onSelect, style,
                             striped = index % 2 == 1,
@@ -352,10 +421,7 @@ fun <T, M> DataGrid(
                             onToggleMark = onToggleMark,
                             menu = rowMenu,
                         )
-                        if (rowDetail != null) {
-                            DetailRow(columns, row, selected, onSelect, rowDetailIndent) { rowDetail(row) }
-                        }
-                        // Markers follow the whole row, detail line included.
+                        // Markers follow the row they were keyed to.
                         markers?.afterKey?.get(key(row))?.forEach { markers.content(it) }
                     }
                     markers?.trailing?.forEach { marker ->
@@ -381,7 +447,7 @@ fun <T, M> DataGrid(
 private fun <T> GridHeader(
     cols: SnapshotStateList<GridColumn<T>>,
     filters: SnapshotStateMap<String, ColumnFilter>?,
-    filterSource: List<T>,
+    boundFacets: GridFacetBinding?,
     reorderable: Boolean,
     style: GridStyle,
 ) {
@@ -431,13 +497,13 @@ private fun <T> GridHeader(
                 ) {
                     CellText(
                         col.label,
-                        color = if (filters?.get(col.key)?.isActive == true) P.accent else style.labelColor,
+                        color = if (columnIsFiltered(col.key, filters, boundFacets)) P.accent else style.labelColor,
                         style = style.labelStyle ?: Typo.label, family = P.Ui,
                         // Fill the row so the funnel is pushed to the right corner.
                         modifier = Modifier.weight(1f),
                     )
                     if (filters != null && col.filterable) {
-                        FilterFunnel(col, filters, filterSource, open = openFilter == col.key,
+                        FilterFunnel(col, filters, boundFacets, open = openFilter == col.key,
                             onToggle = { openFilter = if (openFilter == col.key) null else col.key },
                             onDismiss = { openFilter = null })
                     }
@@ -490,7 +556,7 @@ private fun <T> resize(
 private fun <T> FilterFunnel(
     col: GridColumn<T>,
     filters: SnapshotStateMap<String, ColumnFilter>,
-    filterSource: List<T>,
+    boundFacets: GridFacetBinding?,
     open: Boolean,
     onToggle: () -> Unit,
     onDismiss: () -> Unit,
@@ -506,7 +572,7 @@ private fun <T> FilterFunnel(
             onClick = onToggle,
             modifier = Modifier.size(16.dp),
         )
-        if (open) FilterPopup(col, filters, filterSource, onDismiss)
+        if (open) FilterPopup(col, filters, boundFacets, onDismiss)
     }
 }
 
@@ -514,7 +580,7 @@ private fun <T> FilterFunnel(
 private fun <T> FilterPopup(
     col: GridColumn<T>,
     filters: SnapshotStateMap<String, ColumnFilter>,
-    filterSource: List<T>,
+    boundFacets: GridFacetBinding?,
     onDismiss: () -> Unit,
 ) {
     Popup(
@@ -523,54 +589,141 @@ private fun <T> FilterPopup(
         properties = PopupProperties(focusable = true),
     ) {
         val filter = filters[col.key] ?: ColumnFilter()
+        // Where this column's ticks actually live. A bound column's ticks are
+        // somebody else's state; an unbound one's are its own.
+        val bound = boundFacets?.takeIf { col.key in it.keys }
+        val ticked = bound?.selected(col.key) ?: filter.selected
         // Recomputed only while the popup is open, and keyed on the row count so
         // a live capture keeps the list current without rescanning every frame.
-        val facets = remember(col.key, filterSource.size) { facetsOf(filterSource, col) }
+        val facets = col.facets
         val width = when {
-            facets.isNotEmpty() -> 240.dp
-            col.presets.isNotEmpty() -> 128.dp
-            else -> 176.dp
+            facets.isNotEmpty() -> 232.dp
+            col.presets.isNotEmpty() -> 160.dp
+            else -> 192.dp
         }
 
-        // Framed in the header's own rule rather than the accent: the popup
-        // shares the header's surface, so matching its border makes it read as
-        // the strip dropping open. An accent outline made it a floating card.
-        Column(Modifier.width(width).background(P.chrome).border1(P.line)) {
-            // The field is the first thing in the popup — the column's name is
-            // already on the header this dropped from, so repeating it above the
-            // field only pushed the useful control down a row. Clear sits beside
-            // it as an icon, which is what it is: one verb, no label needed.
+        // A card, not the header strip dropping open. The popup floats over the
+        // grid and reads as a thing in front of it, so it gets rounded corners
+        // and a clip — without the clip the tick list's own rows would square
+        // the bottom two off again.
+        Column(
+            Modifier.width(width)
+                .background(P.chrome, POPUP_SHAPE)
+                .border(1.dp, P.line, POPUP_SHAPE)
+                .clip(POPUP_SHAPE),
+        ) {
+            // Which column this is filtering. The header it dropped from says so
+            // too, but the popup overlaps that strip and covers its neighbours —
+            // and once you have scrolled a list of values, the column you opened
+            // is the one thing no longer in front of you. Clear sits up here as
+            // an icon, which is what it is: one verb, no label needed.
             Row(
-                Modifier.fillMaxWidth().bottomBorder(P.line).padding(horizontal = 7.dp, vertical = 5.dp),
+                Modifier.fillMaxWidth().background(P.head).bottomBorder(P.line)
+                    .padding(start = 10.dp, end = 4.dp, top = 4.dp, bottom = 4.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                BasicTextField(
-                    value = filter.text,
-                    onValueChange = { filters[col.key] = filter.withText(it) },
-                    singleLine = true,
-                    textStyle = Typo.h2.copy(color = P.text, fontFamily = P.Mono),
-                    cursorBrush = SolidColor(P.accent),
-                    modifier = Modifier.weight(1f).background(P.bg).border1(P.line)
-                        .padding(horizontal = 5.dp, vertical = 2.dp),
-                    decorationBox = { inner ->
-                        Box(contentAlignment = Alignment.CenterStart) {
-                            if (filter.text.isEmpty()) {
-                                PzText(
-                                    if (facets.isEmpty()) "contains…" else "search…",
-                                    color = P.faint, style = Typo.label,
-                                )
-                            }
-                            inner()
-                        }
-                    },
+                PzText(
+                    "Filter for \u2018" + col.label + "\u2019",
+                    color = P.dim, style = Typo.label, family = P.Ui, maxLines = 1,
+                    modifier = Modifier.weight(1f),
                 )
-                Spacer(Modifier.width(4.dp))
                 IconActionButton(
                     key = AllIconsKeys.General.Close,
                     contentDescription = "Clear this filter",
-                    enabled = filter.isActive,
-                    onClick = { filters.remove(col.key); onDismiss() },
+                    enabled = filter.isActive || ticked.isNotEmpty(),
+                    onClick = {
+                        filters.remove(col.key)
+                        bound?.clear?.invoke(col.key)
+                        onDismiss()
+                    },
                 )
+            }
+
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 7.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                var focused by remember { mutableStateOf(false) }
+                val negated = filter.negated
+                // The focus ring, which is the only thing in the popup that says
+                // where the keys are going: the tick list below takes clicks but
+                // never the caret, so without it a popup with a list in it looks
+                // like nothing is ready for typing.
+                Row(
+                    // Height after the frame, so the border is the field's own
+                    // edge rather than a box drawn around a padded one.
+                    Modifier.weight(1f).height(24.dp)
+                        .background(P.bg, ChipShape)
+                        .border(1.dp, if (focused) P.accent else P.line, ChipShape)
+                        .padding(start = 8.dp, end = 3.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    // Inside the field rather than beside it, so it reads as part
+                    // of the input instead of a button next to one.
+                    Icon(
+                        key = AllIconsKeys.Actions.Search,
+                        contentDescription = null,
+                        tint = if (focused) P.accent else P.faint,
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    BasicTextField(
+                        value = filter.text,
+                        onValueChange = { filters[col.key] = filter.withText(it) },
+                        singleLine = true,
+                        textStyle = Typo.h2.copy(color = P.text, fontFamily = P.Mono),
+                        cursorBrush = SolidColor(P.accent),
+                        modifier = Modifier.weight(1f).onFocusChanged { focused = it.isFocused },
+                        decorationBox = { inner ->
+                            Box(contentAlignment = Alignment.CenterStart) {
+                                if (filter.text.isEmpty()) {
+                                    PzText(
+                                        if (facets.isEmpty()) "contains…" else "search…",
+                                        color = P.faint, style = Typo.label,
+                                    )
+                                }
+                                inner()
+                            }
+                        },
+                    )
+
+                    // Clears the typed text and nothing else — not the ticks,
+                    // not the comparison. The Close button in the header clears
+                    // the whole filter and shuts the popup; these two look alike
+                    // and must not do alike, so this one only ever empties the
+                    // field it sits in.
+                    //
+                    // Always laid out and only sometimes visible: appearing as
+                    // you type the first character would shove the caret
+                    // sideways mid-word.
+                    IconActionButton(
+                        key = AllIconsKeys.General.Close,
+                        contentDescription = "Clear the text",
+                        enabled = filter.text.isNotEmpty(),
+                        onClick = { filters[col.key] = filter.withText("") },
+                        modifier = Modifier.size(TRAILING).revealed(filter.text.isNotEmpty()),
+                    )
+
+                    // Whether the text includes or excludes, in the field it
+                    // governs. It used to sit outside as a bordered box of its
+                    // own, which made it look like a second input rather than a
+                    // switch on this one. Two states need no list to choose
+                    // from — a dropdown here spent ninety pixels and still
+                    // truncated its own label to "contai…".
+                    Box(
+                        Modifier.size(TRAILING)
+                            .clip(ChipShape)
+                            .background(if (negated) P.accentFill else Color.Transparent)
+                            .pointerHoverIcon(PointerIcon.Hand)
+                            .clickable { filters[col.key] = filter.withNegated(!negated) },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        PzText(
+                            if (negated) "≠" else "=",
+                            color = if (negated) P.accent else P.faint,
+                            style = Typo.label,
+                        )
+                    }
+                }
             }
 
             // A numeric column gets a comparison instead of a tick list: "bigger
@@ -588,7 +741,7 @@ private fun <T> FilterPopup(
                     ).forEach { (operator, label) ->
                         val on = filter.op == operator
                         Box(
-                            Modifier.background(if (on) P.accentFill else Color.Transparent)
+                            Modifier.background(if (on) P.accentFill else Color.Transparent, ChipShape)
                                 .pointerHoverIcon(PointerIcon.Hand)
                                 // Clicking the chosen one clears it, so a
                                 // comparison can be taken off without also
@@ -611,8 +764,10 @@ private fun <T> FilterPopup(
                         singleLine = true,
                         textStyle = Typo.h2.copy(color = P.text, fontFamily = P.Mono),
                         cursorBrush = SolidColor(P.accent),
-                        modifier = Modifier.weight(1f).background(P.bg).border1(P.line)
-                            .padding(horizontal = 5.dp, vertical = 2.dp),
+                        modifier = Modifier.weight(1f).height(22.dp)
+                            .background(P.bg, ChipShape)
+                            .border(1.dp, P.line, ChipShape)
+                            .padding(horizontal = 7.dp),
                         decorationBox = { inner ->
                             Box(contentAlignment = Alignment.CenterStart) {
                                 if (filter.operand.isEmpty()) {
@@ -640,18 +795,30 @@ private fun <T> FilterPopup(
                             }
                         }
                         items(shown, key = { it }) { facet ->
-                            val on = facet in filter.selected
-                            Row(
-                                Modifier.fillMaxWidth()
+                            val on = facet in ticked
+                            // One click target over the box and the label, not
+                            // a row-level `clickable` with a checkbox sitting on
+                            // top of it: a bare CheckBox has no handler, which
+                            // makes it *disabled*, and a disabled checkbox eats
+                            // the press instead of letting it through. Clicking
+                            // the label worked and clicking the box — the one
+                            // thing that looks like the control — did nothing.
+                            CheckBoxRow(
+                                checked = on,
+                                modifier = Modifier.fillMaxWidth().height(26.dp)
                                     .background(if (on) P.sel else Color.Transparent)
                                     .pointerHoverIcon(PointerIcon.Hand)
-                                    // Stays open: picking several is the point.
-                                    .clickable { filters[col.key] = filter.toggle(facet) }
-                                    .padding(horizontal = 8.dp, vertical = 2.dp),
-                                verticalAlignment = Alignment.CenterVertically,
+                                    .padding(horizontal = 10.dp),
+                                // Stays open: picking several is the point.
+                                onCheckedChange = {
+                                    if (bound != null) {
+                                        bound.toggle(col.key, facet)
+                                    } else {
+                                        filters[col.key] = filter.toggle(facet)
+                                    }
+                                },
                             ) {
-                                CheckBox(on)
-                                Spacer(Modifier.width(8.dp))
+                                Spacer(Modifier.width(2.dp))
                                 CellText(facet, color = if (on) P.text else P.dim, style = Typo.label)
                             }
                         }
@@ -768,38 +935,6 @@ private fun <T> GridRow(
                 horizontalArrangement = if (col.end) Arrangement.End else Arrangement.Start,
             ) { col.cell(row) }
         }
-    }
-}
-
-/**
- * The second line of a detailed-mode row. Carries the row's selection state and
- * click target so the pair behaves as one row, and owns the bottom border that
- * closes it.
- *
- * [indent] leading columns are left empty, laid out with the very same width
- * rules as the data row above, so the content starts exactly on a column edge.
- */
-@Composable
-private fun <T> DetailRow(
-    cols: List<GridColumn<T>>,
-    row: T,
-    selected: Boolean,
-    onSelect: ((T) -> Unit)?,
-    indent: Int,
-    content: @Composable () -> Unit,
-) {
-    Row(
-        Modifier.fillMaxWidth()
-            .background(if (selected) P.sel else Color.Transparent)
-            .then(if (selected) Modifier.leftBorder(P.accent, 2.dp) else Modifier)
-            .bottomBorder(P.line2)
-            .then(if (onSelect == null) Modifier else Modifier.clickable { onSelect(row) }),
-    ) {
-        cols.take(indent).forEach { col -> Spacer(cellWidth(col)) }
-        // The rest of the width, expressed as the weight the skipped-past
-        // columns would have shared, so the content lines up with their edge.
-        val remaining = cols.drop(indent).filterNot { it.fixed }.fold(0f) { a, c -> a + c.weight }
-        Box(if (remaining > 0f) Modifier.weight(remaining) else Modifier.weight(1f)) { content() }
     }
 }
 

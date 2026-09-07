@@ -1,5 +1,7 @@
-package org.bittrace.ui
+package org.bittrace.ui.components
 
+import org.bittrace.ui.P
+import org.bittrace.ui.Typo
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -22,8 +24,8 @@ import com.monkopedia.kodemirror.view.placeholder
 import com.monkopedia.kodemirror.view.rememberEditorSession
 import com.monkopedia.kodemirror.view.scrollPastEnd
 import com.monkopedia.kodemirror.view.setDoc
-import org.bittrace.ui.editor.editorAppearance
-import org.bittrace.ui.editor.languageFor
+import org.bittrace.ui.components.editor.editorAppearance
+import org.bittrace.ui.components.editor.languageFor
 
 /**
  * The app's code surface, over KodeMirror.
@@ -59,7 +61,6 @@ fun CodeEditor(
         val latest by rememberUpdatedState(onValueChange)
         val language = languageFor(contentType)
         val appearance = editorAppearance()
-        val hint = placeholder
 
         val session = rememberEditorSession(
             doc = value,
@@ -76,7 +77,7 @@ fun CodeEditor(
                     // text. Modest: the default is 200dp, which is most of a
                     // body pane.
                     scrollPastEnd(60.dp),
-                    hint.takeIf { it.isNotEmpty() }?.let { placeholder(it) },
+                    placeholder.takeIf { it.isNotEmpty() }?.let { placeholder(it) },
                     // Past the limit the text is shown but not typed into. The
                     // port handles large documents far better than what came
                     // before, but a megabyte of JSON is still not something to

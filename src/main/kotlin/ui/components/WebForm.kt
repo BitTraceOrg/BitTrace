@@ -1,4 +1,4 @@
-package org.bittrace.components
+package org.bittrace.ui.components
 
 import java.net.URLDecoder
 
@@ -83,7 +83,7 @@ private fun parseMultipart(bytes: ByteArray, boundary: String): List<FormField> 
         val next = indexOf(bytes, delimiter, partStart)
         val partEnd = if (next < 0) bytes.size else next
         val headerEnd = indexOf(bytes, separator, partStart)
-        if (headerEnd < 0 || headerEnd > partEnd) break
+        if (headerEnd !in 0..partEnd) break
 
         val headers = String(bytes, partStart, headerEnd - partStart, Charsets.ISO_8859_1)
         val bodyStart = headerEnd + separator.size

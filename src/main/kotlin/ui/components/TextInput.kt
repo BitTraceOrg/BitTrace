@@ -1,5 +1,7 @@
-package org.bittrace.ui
+package org.bittrace.ui.components
 
+import org.bittrace.ui.P
+import org.bittrace.ui.Typo
 import androidx.compose.foundation.text.input.rememberTextFieldState
 import androidx.compose.foundation.text.input.setTextAndPlaceCursorAtEnd
 import androidx.compose.runtime.Composable

@@ -1,4 +1,4 @@
-package org.bittrace.components
+package org.bittrace.ui.components
 
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.padding
@@ -31,16 +31,26 @@ fun Rail(nav: String, onNav: (String) -> Unit) {
         Modifier.fillMaxHeight().width(40.dp).background(P.chrome).rightBorder(P.line)
             .padding(vertical = 4.dp),
     ) {
-        RailItem("home", AllIconsKeys.Nodes.HomeFolder, nav, onNav)
-        RailItem("traffic", AllIconsKeys.General.Web, nav, onNav)
-        RailItem("api", AllIconsKeys.Actions.SwapPanels, nav, onNav)
+        RailItem("home", "Home", AllIconsKeys.Nodes.HomeFolder, nav, onNav)
+        RailItem("traffic", "Network traffic", AllIconsKeys.General.Web, nav, onNav)
+        // `actions/compile` is IntelliJ's hammer, which is the whole reason it
+        // is here: this is the bench where requests get made, and the icon that
+        // was here before — two arrows swapping panels — described a layout.
+        RailItem("api", "Request Forge", AllIconsKeys.Actions.Compile, nav, onNav)
         Spacer(Modifier.weight(1f))
-        RailItem("settings", AllIconsKeys.General.Settings, nav, onNav)
+        RailItem("settings", "Settings", AllIconsKeys.General.Settings, nav, onNav)
     }
 }
 
 @Composable
-private fun RailItem(key: String, icon: IconKey, nav: String, onNav: (String) -> Unit) {
+private fun RailItem(
+    key: String,
+    /** What this is called. Separate from [key], which is the nav route. */
+    label: String,
+    icon: IconKey,
+    nav: String,
+    onNav: (String) -> Unit,
+) {
     val on = nav == key
     // No divider between items and no accent edge: the stripe marks the active
     // tool with a filled 30x30 button and nothing else (DESIGN.MD §8).
@@ -50,7 +60,7 @@ private fun RailItem(key: String, icon: IconKey, nav: String, onNav: (String) ->
     ) {
         SelectableIconActionButton(
             key = icon,
-            contentDescription = key,
+            contentDescription = label,
             selected = on,
             onClick = { onNav(key) },
             modifier = Modifier.size(30.dp),

@@ -1,5 +1,6 @@
-package org.bittrace.components
+package org.bittrace.ui.components
 
+import org.bittrace.ui.ChipShape
 import org.bittrace.ui.Typo
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -21,12 +22,9 @@ import androidx.compose.ui.unit.dp
 import org.bittrace.api.ApiRequest
 import org.bittrace.api.importRequest
 import org.bittrace.plugin.importer.RequestImporter
-import org.bittrace.ui.AppDialog
-import org.bittrace.ui.CodeEditor
-import org.bittrace.ui.GhostButton
+
 import org.bittrace.ui.P
-import org.bittrace.ui.PrimaryButton
-import org.bittrace.ui.PzText
+
 import org.bittrace.ui.bottomBorder
 import org.bittrace.ui.clipboardText
 
@@ -91,7 +89,7 @@ fun ImportRequestDialog(
             importers.forEach { importer ->
                 val on = importer.id == claimed?.id
                 Box(
-                    Modifier.background(if (on) P.accent else P.head)
+                    Modifier.background(if (on) P.accent else P.head, ChipShape)
                         .padding(horizontal = 8.dp, vertical = 2.dp),
                 ) {
                     PzText(

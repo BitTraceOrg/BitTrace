@@ -1,4 +1,4 @@
-package org.bittrace.ui.editor
+package org.bittrace.ui.components.editor
 
 import com.monkopedia.kodemirror.autocomplete.Completion
 import com.monkopedia.kodemirror.autocomplete.CompletionResult

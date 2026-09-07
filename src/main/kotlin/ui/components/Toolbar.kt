@@ -1,5 +1,6 @@
-package org.bittrace.components
+package org.bittrace.ui.components
 
+import org.bittrace.ui.ChipShape
 import org.bittrace.ui.Typo
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -14,7 +15,6 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -26,10 +26,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import org.bittrace.ui.Dot
+
 import org.bittrace.ui.P
-import org.bittrace.ui.PzText
-import org.bittrace.ui.border1
+
 import org.jetbrains.jewel.ui.component.ActionButton
 import org.jetbrains.jewel.ui.component.MenuScope
 import org.jetbrains.jewel.ui.component.PopupMenu
@@ -174,7 +173,6 @@ private fun MenuScope.menuEntry(action: MenuAction, onDismiss: () -> Unit) {
     }
 }
 
-
 // ---------------------------------------------------------------------------
 // Address
 // ---------------------------------------------------------------------------
@@ -193,20 +191,18 @@ fun AddressBar(host: String, port: Int, running: Boolean) {
         // fill a shape and not the outline, and square corners show through it.
         Modifier
             .height(25.dp)
-            .background(P.bg, ADDRESS_SHAPE)
-            .border(1.dp, P.line, ADDRESS_SHAPE)
+            .background(P.bg, ChipShape)
+            .border(1.dp, P.line, ChipShape)
             .padding(horizontal = 18.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(1.dp),
     ) {
         Dot(if (running) P.ok else P.err, 5)
         Spacer(Modifier.width(7.dp))
-        PzText("http://", color = P.faint, style = Typo.label)
+        PzText("https://", color = P.faint, style = Typo.label)
         PzText(host, color = P.text, style = Typo.label)
         PzText(":", color = P.faint, style = Typo.label)
         PzText(port.toString(), color = P.accent, style = Typo.label, weight = FontWeight.Medium)
     }
 }
 
-/** Just enough to round the address field without it reading as a pill. */
-private val ADDRESS_SHAPE = RoundedCornerShape(4.dp)

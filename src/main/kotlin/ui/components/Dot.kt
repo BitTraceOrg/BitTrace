@@ -1,4 +1,4 @@
-package org.bittrace.ui
+package org.bittrace.ui.components
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box

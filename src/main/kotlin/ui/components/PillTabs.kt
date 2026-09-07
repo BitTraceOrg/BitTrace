@@ -1,5 +1,7 @@
-package org.bittrace.ui
+package org.bittrace.ui.components
 
+import org.bittrace.ui.P
+import org.bittrace.ui.Typo
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import org.jetbrains.jewel.foundation.theme.JewelTheme

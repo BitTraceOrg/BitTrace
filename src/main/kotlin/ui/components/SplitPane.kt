@@ -1,4 +1,4 @@
-package org.bittrace.ui
+package org.bittrace.ui.components
 
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row

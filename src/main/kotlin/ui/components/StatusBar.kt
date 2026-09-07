@@ -1,5 +1,6 @@
-package org.bittrace.components
+package org.bittrace.ui.components
 
+import org.bittrace.ui.bytesStr
 import org.bittrace.ui.Typo
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -37,11 +38,12 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupPositionProvider
 import org.bittrace.ui.P
-import org.bittrace.ui.PzText
+
 import org.bittrace.ui.leftBorder
 import org.bittrace.ui.rightBorder
 import org.bittrace.ui.topBorder
 import org.jetbrains.jewel.ui.component.Icon
+import org.jetbrains.jewel.ui.component.IndeterminateHorizontalProgressBar
 import org.jetbrains.jewel.ui.icons.AllIconsKeys
 
 /**
@@ -53,6 +55,20 @@ import org.jetbrains.jewel.ui.icons.AllIconsKeys
 @Composable
 fun StatusBar(
     flows: Int,
+    /** The overview band's query, spelled out, or null when nothing is filtered. */
+    query: String?,
+    /** How many of [flows] the query keeps. */
+    queryMatches: Int,
+    /**
+     * What is running, or null when nothing is.
+     *
+     * One slot for the whole app rather than a spinner per feature. Work that
+     * takes long enough to notice is rare enough that two pieces of it at once
+     * is not worth a second row, and a status bar with a bar that comes and goes
+     * in one known place is easier to read than one that sprouts indicators in
+     * different corners.
+     */
+    busy: String?,
     ok: Int,
     failed: Int,
     /** Bytes seen across every captured flow, headers and bodies both. */
@@ -88,7 +104,25 @@ fun StatusBar(
             if (warn > 0) { Spacer(Modifier.width(6.dp)); PzText("$warn", color = P.warn, style = Typo.label) }
             if (error > 0) { Spacer(Modifier.width(6.dp)); PzText("$error", color = P.err, style = Typo.label) }
         }
-        StatusCell(border = true) { PzText("$flows flows", color = P.dim, style = Typo.label) }
+        StatusCell(border = true) {
+            // "312 flows of 4,102" while a query runs. A bare count next to a
+            // filtered grid is the reading that gets someone stuck: the number
+            // is right and the grid looks broken, with nothing on screen saying
+            // the two disagree because something is being filtered.
+            PzText(
+                if (query == null) "$flows flows" else "$queryMatches flows of $flows",
+                color = if (query == null) P.dim else P.accent,
+                style = Typo.label,
+            )
+        }
+        // The query itself, and the only place it survives the band collapsing.
+        if (query != null) {
+            StatusCell(border = true) {
+                PzText("⌕", color = P.accent, style = Typo.label, family = P.Ui)
+                Spacer(Modifier.width(6.dp))
+                PzText(query, color = P.dim, style = Typo.label, maxLines = 1)
+            }
+        }
         // The counts double as filters, and they are toggles: clicking one shows
         // only those flows, clicking it again clears it. The cell's fill is what
         // says which state it is in — a close icon spelled the same thing out a
@@ -100,6 +134,16 @@ fun StatusBar(
         StatusCell(border = true, active = failedFilterOn, onClick = onFilterFailed) {
             PzText("$failed failed", color = P.err, style = Typo.label)
         }
+        // Between the counts and the readouts: it appears and disappears, so it
+        // sits where nothing else has to move aside for it.
+        if (busy != null) {
+            StatusCell(border = true) {
+                IndeterminateHorizontalProgressBar(Modifier.width(64.dp))
+                Spacer(Modifier.width(8.dp))
+                PzText(busy, color = P.dim, style = Typo.label, family = P.Ui, maxLines = 1)
+            }
+        }
+
         Spacer(Modifier.weight(1f))
         // How much has come through, on the right where the readouts live. The
         // proxy target used to sit here and the title bar already carries it,

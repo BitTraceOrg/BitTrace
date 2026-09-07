@@ -1,4 +1,4 @@
-package org.bittrace.ui.editor
+package org.bittrace.ui.components.editor
 
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.text.TextStyle

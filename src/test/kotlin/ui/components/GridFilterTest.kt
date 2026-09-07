@@ -1,10 +1,12 @@
-package org.bittrace.ui
+package org.bittrace.ui.components
 
-import org.bittrace.components.CONTENT_KINDS
-import org.bittrace.components.DEFAULT_COLUMN_KEYS
-import org.bittrace.components.HTTP_METHOD_FACETS
-import org.bittrace.components.STATUS_CLASSES
-import org.bittrace.components.columnCatalog
+import org.bittrace.ui.layouts.inspector.components.defaultColumns
+import org.bittrace.ui.layouts.inspector.components.CONTENT_KINDS
+import org.bittrace.ui.layouts.inspector.components.DEFAULT_COLUMN_KEYS
+import org.bittrace.data.HTTP_METHODS
+import org.bittrace.ui.layouts.inspector.components.STATUS_CLASSES
+import org.bittrace.ui.layouts.inspector.components.columnCatalog
+import org.bittrace.ui.layouts.inspector.components.FACET_COLUMNS
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -38,7 +40,7 @@ class GridFilterTest {
         // Declared rather than derived: a list built from captured traffic
         // cannot offer 5xx until a 5xx has happened.
         assertEquals(STATUS_CLASSES, byKey.getValue("st").facets)
-        assertEquals(HTTP_METHOD_FACETS, byKey.getValue("method").facets)
+        assertEquals(HTTP_METHODS, byKey.getValue("method").facets)
         assertEquals(CONTENT_KINDS, byKey.getValue("type").facets)
     }
 
@@ -125,5 +127,53 @@ class GridFilterTest {
         assertEquals("a", filter.toggle("4xx").text)
         assertEquals(setOf("2xx", "4xx"), filter.toggle("4xx").selected)
         assertEquals("a", filter.withComparison(OP_EQUAL, "2kb").text)
+    }
+
+    @Test
+    fun `excludes inverts the typed text, and only the typed text`() {
+        val rows = listOf("api.example.com", "cdn.other.com", "api.other.com")
+        val cols = listOf(GridColumn<String>("host", "Host", 1f, value = { it }, cell = {}))
+
+        val contains = mapOf("host" to ColumnFilter(text = "api"))
+        assertEquals(listOf("api.example.com", "api.other.com"), applyGridFilters(rows, cols, contains))
+
+        val excludes = mapOf("host" to ColumnFilter(text = "api", negated = true))
+        assertEquals(listOf("cdn.other.com"), applyGridFilters(rows, cols, excludes))
+    }
+
+    @Test
+    fun `an empty needle is not an exclusion of everything`() {
+        // Negating a blank field would filter the whole grid away the moment you
+        // picked "excludes" and before you typed what to exclude.
+        val filter = ColumnFilter(text = "", negated = true)
+
+        assertTrue(filter.textOk("anything"))
+        assertFalse(filter.isActive)
+    }
+
+    @Test
+    fun `every bound facet column exists, and offers a closed set`() {
+        // The binding is keyed by column key, so a renamed column would not fail
+        // to compile — it would silently stop editing the band's query, and the
+        // header funnel would go back to filtering on its own. This is what
+        // notices.
+        val byKey = columnCatalog().associateBy { it.key }
+
+        FACET_COLUMNS.keys.forEach { key ->
+            val col = byKey[key] ?: error("no column '$key' for the facet binding")
+            assertTrue(col.facets.isNotEmpty(), "'$key' is bound but offers no tick list")
+        }
+    }
+
+    @Test
+    fun `the grid does not also apply what the band owns`() {
+        // Both surfaces write one set. If the grid kept applying its own copy
+        // too, the ticks would be ANDed with themselves — harmless until the
+        // band's OR-within-a-group made the two disagree.
+        val rows = listOf("GET", "POST")
+        val cols = columnCatalog().filter { it.key in FACET_COLUMNS.keys }
+
+        assertEquals(rows, applyGridFilters(rows, emptyList(), mapOf("st" to ColumnFilter())))
+        assertTrue(cols.isNotEmpty())
     }
 }

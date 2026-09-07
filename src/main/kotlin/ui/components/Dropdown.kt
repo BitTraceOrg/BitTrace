@@ -1,5 +1,6 @@
-package org.bittrace.ui
+package org.bittrace.ui.components
 
+import org.bittrace.ui.undecoratedComboBoxStyle
 import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
@@ -39,3 +40,15 @@ fun Dropdown(
         modifier = modifier.width(width),
     )
 }
+
+/**
+ * How tall a [Dropdown] is at rest.
+ *
+ * Read from the theme's own metrics rather than written down, so a row that
+ * reserves space for a picker cannot disagree with the picker it reserves it
+ * for. The tree needs this: a project row has no branch control until git has
+ * finished reading the repository, and without a reserved height every row in
+ * the tree grew a few pixels the moment that read landed.
+ */
+val dropdownHeight: Dp
+    @Composable get() = undecoratedComboBoxStyle().metrics.minSize.height

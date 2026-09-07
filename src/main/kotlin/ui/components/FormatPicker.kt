@@ -1,5 +1,7 @@
-package org.bittrace.ui
+package org.bittrace.ui.components
 
+import org.bittrace.ui.P
+import org.bittrace.ui.bottomBorder
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row

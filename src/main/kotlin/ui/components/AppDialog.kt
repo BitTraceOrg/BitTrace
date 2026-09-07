@@ -1,5 +1,13 @@
-package org.bittrace.ui
+package org.bittrace.ui.components
 
+import org.bittrace.ui.P
+import org.bittrace.ui.Typo
+import org.bittrace.ui.border1
+import org.bittrace.ui.bottomBorder
+import org.bittrace.ui.topBorder
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -10,6 +18,7 @@ import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.window.WindowDraggableArea
@@ -21,9 +30,14 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.DialogWindow
+import androidx.compose.ui.window.DialogWindowScope
 import androidx.compose.ui.window.rememberDialogState
+import org.bittrace.plugin.ThemeManager
+import org.bittrace.ui.BitTraceTheme
+import org.jetbrains.jewel.intui.standalone.theme.IntUiTheme
 import org.jetbrains.jewel.ui.component.IconActionButton
 import org.jetbrains.jewel.ui.icons.AllIconsKeys
+import org.jetbrains.jewel.window.DecoratedWindow
 
 /**
  * The app's own window frame, for the dialogs that do not use the platform's.
@@ -53,31 +67,10 @@ fun AppDialog(
     DialogWindow(
         onCloseRequest = onClose,
         state = rememberDialogState(size = size),
-        undecorated = true,
         resizable = resizable,
+        title = title
     ) {
         Column(Modifier.fillMaxSize().background(surface).border1(P.line)) {
-            WindowDraggableArea {
-                Row(
-                    Modifier.fillMaxWidth().background(P.chrome).bottomBorder(P.line).padding(start = 12.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    PzText(
-                        title,
-                        color = P.dim, style = Typo.label, family = P.Ui,
-                        weight = FontWeight.SemiBold, softWrap = false,
-                    )
-                    Spacer(Modifier.weight(1f))
-                    Box(Modifier.width(42.dp), contentAlignment = Alignment.Center) {
-                        IconActionButton(
-                            key = AllIconsKeys.General.Close,
-                            contentDescription = "Close",
-                            onClick = onClose,
-                        )
-                    }
-                }
-            }
-
             content()
 
             if (footer != null) {
@@ -91,4 +84,44 @@ fun AppDialog(
             }
         }
     }
+}
+
+/**
+ * A dialog's Cancel-and-confirm pair.
+ *
+ * The four git dialogs each wrote this out and each added an explicit 8dp
+ * spacer — on top of the [Arrangement.spacedBy] the footer row already applies,
+ * so their buttons sat 16dp apart while the two older dialogs sat at 8dp. One
+ * component removes the arithmetic and the inconsistency together.
+ *
+ * @param leading anything that belongs at the far left — a count, a status line,
+ *   an extra verb. It is what the two dialogs that are not just Cancel/confirm
+ *   need in order to use this too.
+ */
+@Composable
+fun RowScope.DialogFooter(
+    confirm: String,
+    onCancel: () -> Unit,
+    confirmEnabled: Boolean = true,
+    leading: @Composable RowScope.() -> Unit = {},
+    onConfirm: () -> Unit,
+) {
+    Spacer(Modifier.weight(1f))
+    GhostButton("Cancel", onClick = onCancel)
+    PrimaryButton(confirm, enabled = confirmEnabled, onClick = onConfirm)
+}
+
+/**
+ * A [FocusRequester] that takes focus once the composable appears.
+ *
+ * Three dialogs each carried this pair of lines. The `runCatching` is not
+ * defensive noise: requesting focus on a node that is not yet attached throws,
+ * and whether it is attached depends on composition order rather than on
+ * anything the caller controls.
+ */
+@Composable
+fun rememberFocused(): FocusRequester {
+    val focus = remember { FocusRequester() }
+    LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
+    return focus
 }

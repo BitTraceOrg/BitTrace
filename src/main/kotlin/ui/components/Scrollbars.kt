@@ -1,9 +1,8 @@
-package org.bittrace.ui
+package org.bittrace.ui.components
 
 import androidx.compose.foundation.gestures.ScrollableState
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
-import org.jetbrains.jewel.ui.component.HorizontalScrollbar
 import org.jetbrains.jewel.ui.component.VerticalScrollbar
 
 /**
@@ -23,8 +22,3 @@ import org.jetbrains.jewel.ui.component.VerticalScrollbar
 @Composable
 fun VScrollbar(state: ScrollableState, modifier: Modifier = Modifier) =
     VerticalScrollbar(state, modifier)
-
-/** Horizontal scrollbar; typically placed under a horizontally scrolling block. */
-@Composable
-fun HScrollbar(state: ScrollableState, modifier: Modifier = Modifier) =
-    HorizontalScrollbar(state, modifier)

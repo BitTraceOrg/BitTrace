@@ -1,5 +1,6 @@
 package org.bittrace
 
+import org.bittrace.ui.layouts.inspector.TrafficView
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import org.bittrace.ui.Typo
@@ -13,17 +14,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.ui.input.key.Key
-import androidx.compose.ui.input.key.KeyEventType
-import androidx.compose.ui.input.key.isCtrlPressed
-import androidx.compose.ui.input.key.key
-import androidx.compose.ui.input.key.onKeyEvent
-import androidx.compose.ui.input.key.type
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateListOf
-import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -35,39 +27,37 @@ import androidx.compose.ui.window.rememberWindowState
 import kotlin.concurrent.thread
 import org.bittrace.api.ApiClientState
 import org.bittrace.api.CollectionStore
+import org.bittrace.api.ProjectVariables
 import org.bittrace.api.HistoryStore
 import org.bittrace.api.requestFromFlow
-import org.bittrace.components.AddressBar
-import org.bittrace.components.ApiView
-import org.bittrace.components.FlowTable
-import org.bittrace.components.HomeView
-import org.bittrace.components.BodySearchBar
-import org.bittrace.components.BodySearchState
-import org.bittrace.components.ImportRequestDialog
-import org.bittrace.components.matchingBodies
-import org.bittrace.components.NerdStats
+import org.bittrace.ui.components.AddressBar
+import org.bittrace.ui.layouts.forge.ApiView
+import org.bittrace.ui.layouts.inspector.components.matchingBodies
+import org.bittrace.ui.layouts.inspector.components.FlowQuery
+import org.bittrace.ui.layouts.inspector.components.matches
+import org.bittrace.ui.layouts.inspector.components.originOf
+import org.bittrace.ui.layouts.home.HomeView
+import org.bittrace.ui.components.ImportRequestDialog
+import org.bittrace.ui.components.NerdStats
 import org.bittrace.tools.DiffTool
 import org.bittrace.tools.Tool
 import org.bittrace.tools.ToolWindow
 import org.bittrace.tools.ToolWindows
-import org.bittrace.components.Inspector
-import org.bittrace.components.LogPanel
-import org.bittrace.components.Menu
-import org.bittrace.components.MenuAction
-import org.bittrace.components.MenuBar
-import org.bittrace.components.Outcome
-import org.bittrace.components.Rail
-import org.bittrace.components.SettingsView
-import org.bittrace.components.StatusBar
-import org.bittrace.components.TableMode
-import org.bittrace.components.Waterfall
-import org.bittrace.components.applyOutcome
-import org.bittrace.components.columnsFor
-import org.bittrace.components.sessionBanners
+import org.bittrace.ui.components.LogPanel
+import org.bittrace.ui.components.Menu
+import org.bittrace.ui.components.MenuAction
+import org.bittrace.ui.components.MenuBar
+import org.bittrace.ui.layouts.inspector.components.Outcome
+import org.bittrace.ui.components.Rail
+import org.bittrace.ui.layouts.settings.SettingsView
+import org.bittrace.ui.components.StatusBar
 import org.bittrace.data.ActivityStore
 import org.bittrace.data.LogStore
 import org.bittrace.data.SessionStore
-import org.bittrace.data.TrafficRow
+import org.bittrace.git.GitCredentials
+import org.bittrace.git.GitIdentity
+import org.bittrace.git.GitService
+import org.bittrace.git.GitStore
 import org.bittrace.data.SettingsStore
 import org.bittrace.data.horizontalLayout
 import org.bittrace.plugin.PluginLoader
@@ -80,16 +70,14 @@ import org.bittrace.proxy.ProxyService
 import org.bittrace.session.HarExporter
 import org.bittrace.session.HarImporter
 import org.bittrace.ui.BitTraceTheme
-import org.bittrace.ui.ColumnFilter
 import org.bittrace.ui.FileDialogs
 import org.bittrace.ui.P
-import org.bittrace.ui.PzText
-import org.bittrace.ui.SplitPane
-import org.bittrace.ui.applyGridFilters
+import org.bittrace.ui.components.PzText
 import org.bittrace.ui.bottomBorder
 import org.jetbrains.jewel.window.DecoratedWindow
 import org.jetbrains.jewel.window.DecoratedWindowScope
 import org.jetbrains.jewel.window.TitleBar
+import kotlin.time.Duration.Companion.milliseconds
 
 fun main() = application {
     val activity = remember { ActivityStore() }
@@ -132,7 +120,7 @@ fun main() = application {
     // while idle.
     LaunchedEffect(activity) {
         while (true) {
-            delay(30_000)
+            delay(30_000.milliseconds)
             activity.flush()
         }
     }
@@ -183,8 +171,76 @@ private fun DecoratedWindowScope.App(
     // Driven by the status bar's ok/failed counts; applied on top of the
     // per-column filters the table header owns.
     var outcome by remember { mutableStateOf(Outcome.ALL) }
+    // The overview band's query, and whether the band is open on it. Hoisted
+    // here because `when (nav)` swaps the traffic subtree away: state owned down
+    // there would be discarded by a visit to Home and the query would silently
+    // clear itself while its status-bar cell still claimed it was running.
+    var query by remember { mutableStateOf(FlowQuery()) }
+    var searching by remember { mutableStateOf(false) }
+    // The body scan. It decodes every cached body in the table, so it runs off
+    // the UI thread behind a debounce — typing a six-character word costs one
+    // pass rather than six. `null` until the first pass lands, which the filter
+    // reads as "not yet" rather than "no matches".
+    var bodyHits by remember { mutableStateOf<Set<String>?>(null) }
+    // Set across the debounce as well as the scan: from where the user is
+    // standing, typing and waiting are one wait, and a bar that only appeared
+    // for the scan would flicker on after a pause rather than acknowledging the
+    // keystroke.
+    var scanning by remember { mutableStateOf(false) }
+    LaunchedEffect(query.text, query.side, store.rows.size) {
+        if (query.text.isBlank()) {
+            bodyHits = null
+            scanning = false
+            return@LaunchedEffect
+        }
+        scanning = true
+        try {
+            delay(SEARCH_DEBOUNCE_MS.milliseconds)
+            val snapshot = store.rows.toList()
+            bodyHits = withContext(Dispatchers.Default) {
+                matchingBodies(snapshot, query.text.trim(), query.side, service::body)
+            }
+        } finally {
+            // A keystroke cancels this effect and starts another, so the flag
+            // has to come off on cancellation too or it sticks on forever.
+            scanning = false
+        }
+    }
+
     var importOpen by remember { mutableStateOf(false) }
     val collections = remember { CollectionStore() }
+    // Git lives as long as the app does: the SSH factory owns a thread pool, so
+    // one per view build would leak one per visit to the API client.
+    val git = remember {
+        GitStore(
+            GitService(
+                identity = { GitIdentity(settings.settings.gitAuthorName, settings.settings.gitAuthorEmail) },
+                credentials = GitCredentials { settings.settings.gitToken },
+            ),
+            onLog = { level, message -> logs.add(level, "git", message) },
+        )
+    }
+    // The store tells us it touched a file; we decide that means a repository
+    // needs re-reading. Nothing in CollectionStore knows git exists.
+    DisposableEffect(collections, git) {
+        collections.onChanged = { path -> collections.projectOf(path)?.let(git::invalidate) }
+        // The fourth refresh trigger, and the only one that catches a change
+        // BitTrace did not make: somebody ran `git pull` in a terminal and
+        // alt-tabbed back. Without it the branch chip keeps showing what was
+        // true when the window lost focus, which reads as a bug rather than as
+        // stale data.
+        val onFocus = object : java.awt.event.WindowAdapter() {
+            override fun windowGainedFocus(event: java.awt.event.WindowEvent?) {
+                git.refreshAll(collections.tree.map { it.path })
+            }
+        }
+        window.addWindowFocusListener(onFocus)
+        onDispose {
+            window.removeWindowFocusListener(onFocus)
+            collections.onChanged = null
+            git.service.close()
+        }
+    }
     val tools = remember { ToolWindows() }
     // Flows picked out for the diff tool. Two at most: marking a third drops the
     // oldest, so the pair is always the two you most recently asked for rather
@@ -199,6 +255,12 @@ private fun DecoratedWindowScope.App(
             store, service,
             proxyPort = { settings.settings.proxyPort },
             defaults = { settings.settings },
+            // Resolved per send from the project the request was opened in — or,
+            // for a draft, from the Forge selection it would be saved into, which
+            // `ApiClientState.draftHome` supplies as the path.
+            variablesFor = { path ->
+                path?.let(collections::projectOf)?.let(ProjectVariables::lookupIn).orEmpty()
+            },
             history = history,
             onLog = { level, message -> logs.add(level, "api", message) },
         )
@@ -248,7 +310,7 @@ private fun DecoratedWindowScope.App(
                         .onFailure { logs.add("warn", "api", it.message ?: "Could not create a collection.") }
                 },
                 // Walking the folder touches the disk, so it stays off the EDT.
-                onRefreshCollections = {
+                onRefreshProjects = {
                     thread(isDaemon = true, name = "collections-reload") { collections.reload() }
                 },
                 onClearHistory = if (history.entries.isEmpty()) null else {
@@ -320,6 +382,11 @@ private fun DecoratedWindowScope.App(
                 when (nav) {
                     "traffic" -> TrafficView(
                         Modifier.fillMaxSize(), store, service, settings, formatters, flowActions, selectedId, outcome,
+                        query = query,
+                        bodyHits = bodyHits,
+                        searching = searching,
+                        onQuery = { query = it },
+                        onSearching = { searching = it },
                         marked = markedIds.toSet(),
                         onToggleMark = { row ->
                             markedIds = if (row.id in markedIds) {
@@ -339,7 +406,11 @@ private fun DecoratedWindowScope.App(
                         HomeView(store, service, activity, port) { nav = "traffic" }
                     }
                     "api" -> Box(Modifier.fillMaxSize()) {
-                        ApiView(api, collections, history, store, service, settings, formatters, collectionActions, window)
+                        ApiView(
+                            api, collections, history, store, service, settings, formatters,
+                            git, collectionActions, window,
+                            onLog = { level, message -> logs.add(level, "forge", message) },
+                        )
                     }
                     "settings" -> Box(Modifier.fillMaxSize()) {
                         SettingsView(settings, service, themeManager)
@@ -361,8 +432,8 @@ private fun DecoratedWindowScope.App(
 
         // Live status counts, read from the snapshot list so they recompose.
         val rows = store.rows
-        val ok = rows.count { r -> r.response?.let { !it.error && it.response.status < 400 } == true }
-        val failed = rows.count { r -> r.response?.let { it.error || it.response.status >= 400 } == true }
+        val ok = rows.count { it.failed == false }
+        val failed = rows.count { it.failed == true }
         // Headers and bodies, both directions — what actually crossed the wire,
         // not just the payloads. HAR writes -1 for a size it does not know, so
         // every term is floored at zero rather than allowed to subtract.
@@ -401,8 +472,22 @@ private fun DecoratedWindowScope.App(
             }
         }
 
+        // Counted here rather than reported up from the grid, and against the
+        // query alone: the column filters have their own visible controls in the
+        // headers, whereas a query survives the band collapsing and this cell is
+        // the only place that still says it is running.
+        val queryOrigin = remember(rows.size) { originOf(rows) }
         StatusBar(
             flows = rows.size,
+            // Whichever is running. Git wins a tie: it is the one that can take
+            // seconds and the one where knowing something is still happening
+            // stops a second click.
+            busy = git.busyLabel ?: "Searching bodies…".takeIf { scanning },
+            // The band seeds a default minute-wide window, so a bare "is there a
+            // window" test would have this cell claiming a query from launch.
+            // What it reports is the count, which is true either way.
+            query = if (query.isEmpty) null else query.describe(),
+            queryMatches = if (query.isEmpty) rows.size else rows.count { query.matches(it, queryOrigin, bodyHits) },
             ok = ok,
             failed = failed,
             captured = captured,
@@ -443,7 +528,7 @@ private fun appMenus(
     onImportRequest: () -> Unit,
     onNewProject: () -> Unit,
     onNewCollection: () -> Unit,
-    onRefreshCollections: () -> Unit,
+    onRefreshProjects: () -> Unit,
     onClearHistory: (() -> Unit)?,
     onSendRequest: () -> Unit,
     onEditFlow: (() -> Unit)?,
@@ -470,9 +555,9 @@ private fun appMenus(
         ),
     ),
     Menu(
-        "API",
+        "Forge",
         listOf(
-            MenuAction("Open API client") { onNav("api") },
+            MenuAction("Open Request Forge") { onNav("api") },
             // Authoring one request: make it, fill it, send it.
             MenuAction("New request", separatorBefore = true, onClick = onNewRequest),
             // Not "Import from clipboard": this opens a dialog to paste into,
@@ -493,12 +578,12 @@ private fun appMenus(
             // this menu reached least often, and flattening it would put a
             // destructive entry next to "New request".
             MenuAction(
-                "Collections",
+                "Projects",
                 separatorBefore = true,
                 submenu = listOf(
                     MenuAction("New project", onClick = onNewProject),
                     MenuAction("New collection", onClick = onNewCollection),
-                    MenuAction("Refresh from disk", onClick = onRefreshCollections),
+                    MenuAction("Refresh from disk", onClick = onRefreshProjects),
                     MenuAction("Clear request history", separatorBefore = true, onClick = onClearHistory),
                 ),
             ),
@@ -542,7 +627,7 @@ private fun appMenus(
             // the list would cost a click every time to save a glance once.
             MenuAction("Home") { onNav("home") },
             MenuAction("Traffic") { onNav("traffic") },
-            MenuAction("API client") { onNav("api") },
+            MenuAction("Request Forge") { onNav("api") },
             MenuAction("Settings") { onNav("settings") },
             // How it is arranged, below the rule.
             // Named for the arrangement, not for where the inspector lands —
@@ -559,146 +644,6 @@ private fun appMenus(
         ),
     ),
 )
-
-@Composable
-private fun TrafficView(
-    modifier: Modifier,
-    store: SessionStore,
-    service: ProxyService,
-    settings: SettingsStore,
-    formatters: List<BodyFormatter>,
-    flowActions: List<FlowActionPlugin>,
-    selectedId: String?,
-    outcome: Outcome,
-    marked: Set<String>,
-    onToggleMark: (TrafficRow) -> Unit,
-    onDiffMarked: (() -> Unit)?,
-    onNotice: (String) -> Unit,
-    onSelect: (String) -> Unit,
-) {
-    val rows = store.rows
-    // Column order (drag-reorderable) and per-column filters live here so the
-    // FLOWS count reflects filtering and the order survives recomposition.
-    // Enabled columns, like the row mode, are resolved once per view build.
-    val cols = remember { mutableStateListOf(*columnsFor(settings.settings.tableColumns).toTypedArray()) }
-    val filters = remember { mutableStateMapOf<String, ColumnFilter>() }
-    // Compact vs detailed rows is read once, when this view is built — not on
-    // every row, arrival or frame. Changing it in Settings applies on the next
-    // visit to the traffic view.
-    val tableMode = remember { TableMode.from(settings.settings.tableMode) }
-    val visible = applyOutcome(applyGridFilters(rows, cols, filters), outcome)
-    // Session boundaries are derived from the visible rows, so filtering can
-    // never leave a banner stranded.
-    val banners = sessionBanners(visible, store::sessionName, store.exportMarks)
-
-    // Inspector size is persisted per dock, so switching docks restores the
-    // size that dock last had rather than reusing the other one's.
-    val inspectorHeight = settings.settings.inspectorHeightDp.dp
-    val inspectorWidth = settings.settings.inspectorWidthDp.dp
-    // Read on every composition, not remembered: the View menu toggles this and
-    // the change should land immediately.
-    val horizontal = settings.settings.horizontalLayout
-    val selectedRow = selectedId?.let { store.get(it) }
-
-    // Body search. The scan runs off the UI thread and is debounced, because it
-    // decodes and searches every cached body in the table — cheap for a hundred
-    // rows and not for ten thousand, and it re-runs on every keystroke.
-    val search = remember { BodySearchState() }
-    var scanning by remember { mutableStateOf(false) }
-    var bodyMatches by remember { mutableStateOf<Set<String>?>(null) }
-
-    LaunchedEffect(search.query, search.side, search.regex, search.open, rows.size) {
-        if (!search.open || search.query.isBlank()) {
-            bodyMatches = null
-            search.problem = null
-            scanning = false
-            return@LaunchedEffect
-        }
-        // A pause before scanning, so typing a six-character word scans once
-        // rather than six times.
-        scanning = true
-        delay(SEARCH_DEBOUNCE_MS)
-        val snapshot = rows.toList()
-        val result = withContext(Dispatchers.Default) {
-            matchingBodies(snapshot, search.query, search.side, search.regex, service::body)
-        }
-        result
-            .onSuccess { ids ->
-                bodyMatches = ids
-                search.matches = ids.size
-                search.problem = null
-            }
-            // A regex mid-typing is usually invalid; saying so beats showing
-            // zero results as though the search had run.
-            .onFailure { search.problem = "bad pattern" }
-        scanning = false
-    }
-
-    val shown = bodyMatches?.let { ids -> visible.filter { it.id in ids } } ?: visible
-
-    // Hoisted rather than written into each dock branch: the two used to carry
-    // the same eight arguments, and only one of the copies would get updated.
-    val table: @Composable (Modifier) -> Unit = { paneModifier ->
-        Box(paneModifier) {
-            FlowTable(
-                cols, filters, shown, rows, selectedId, tableMode, banners,
-                bodyProvider = service::body, flowActions = flowActions,
-                marked = marked, onToggleMark = onToggleMark, onDiffMarked = onDiffMarked,
-                onNotice = onNotice, onSelect = onSelect,
-            )
-        }
-    }
-
-    Column(
-        // `onKeyEvent`, not `onPreviewKeyEvent`. A preview travels root-down and
-        // fires before the focused node, so previewing here claimed Ctrl+F from
-        // whatever had focus — and the inspector's body view has its own Ctrl+F,
-        // which stopped working the moment this was added. Bubbling is the right
-        // semantic for a view-level shortcut: the focused thing gets first
-        // refusal, and this only sees what nothing else wanted.
-        modifier.fillMaxHeight().onKeyEvent { event ->
-            if (event.type != KeyEventType.KeyDown) return@onKeyEvent false
-            when {
-                event.isCtrlPressed && event.key == Key.F -> { search.show(); true }
-                event.key == Key.Escape && search.open -> { search.hide(); true }
-                else -> false
-            }
-        },
-    ) {
-        // The waterfall keeps showing everything: it is the overview, and an
-        // overview narrowed by a search is no longer one. The grid below is
-        // what the search filters.
-        Waterfall(visible, selectedId, onSelect)
-        if (search.open) BodySearchBar(search, scanning)
-
-        // In the horizontal layout the inspector sits beside the table and its
-        // own panes stack, since height is the plentiful axis there. No selection means no
-        // inspector and no splitter either — a grip that resizes nothing is a
-        // control that lies — so the table takes the whole area until a row is
-        // picked.
-        SplitPane(
-            horizontal = horizontal,
-            secondSize = if (horizontal) inspectorWidth else inspectorHeight,
-            onResize = { delta ->
-                settings.update {
-                    if (horizontal) {
-                        it.copy(inspectorWidthDp = (it.inspectorWidthDp + delta.value).coerceIn(280f, 1200f))
-                    } else {
-                        it.copy(inspectorHeightDp = (it.inspectorHeightDp + delta.value).coerceIn(120f, 640f))
-                    }
-                }
-            },
-            second = selectedRow?.let { row ->
-                { paneModifier: Modifier ->
-                    Box(paneModifier) {
-                        Inspector(row, service::body, settings, formatters, stacked = horizontal)
-                    }
-                }
-            },
-            first = table,
-        )
-    }
-}
 
 /**
  * How long typing settles before a body scan runs.

@@ -34,7 +34,11 @@ class RedirectResult(val code: String?, val state: String?, val error: String?, 
 suspend fun awaitRedirect(port: Int, timeoutSeconds: Long): Result<RedirectResult> =
     withContext(Dispatchers.IO) {
         val outcome = runCatching {
-            ServerSocket(port, 1, InetAddress.getByName("127.0.0.1")).use { server ->
+            // Backlog well above one. A browser opens several connections to a
+            // host it is about to fetch from, and a queue of one means the
+            // extras are refused — including, on an unlucky ordering, the one
+            // carrying the code.
+            ServerSocket(port, BACKLOG, InetAddress.getByName("127.0.0.1")).use { server ->
                 // A short accept timeout and a loop, rather than one long
                 // blocking accept. `accept` cannot be interrupted, and a
                 // cancellation handler that closes the socket cannot run while
@@ -52,7 +56,10 @@ suspend fun awaitRedirect(port: Int, timeoutSeconds: Long): Result<RedirectResul
                         continue
                     }
 
-                    val result = socket.use { answer(it) }
+                    // One bad client must not end the authorisation: a socket
+                    // that resets mid-read is a browser tab being closed, not a
+                    // reason to stop listening for the redirect.
+                    val result = runCatching { socket.use { answer(it) } }.getOrNull() ?: continue
                     // Browsers open speculative connections — a preconnect, a
                     // favicon fetch — and taking the first one blind would end
                     // the flow on a request that carries nothing. Only a
@@ -69,9 +76,40 @@ suspend fun awaitRedirect(port: Int, timeoutSeconds: Long): Result<RedirectResul
         outcome
     }
 
-/** Reads one request and answers it, whatever it turns out to be. */
-private fun answer(socket: Socket): RedirectResult {
-    val requestLine = socket.getInputStream().bufferedReader().readLine().orEmpty()
+/**
+ * Reads one request and answers it, whatever it turns out to be.
+ *
+ * Null when the connection carried no request at all.
+ *
+ * **The read timeout is the whole point of this function.** `soTimeout` on the
+ * *server* socket bounds `accept` and nothing else, so a connection that is
+ * opened and then held silent — which is exactly what a browser preconnect is
+ * — was read with no deadline at all. That read blocked the single accept loop
+ * forever, so the redirect carrying the code queued up behind it and was never
+ * answered: the browser showed the callback URL, the app waited out its whole
+ * timeout, and nothing said why. Worse, a thread parked in a socket read is not
+ * cancellable, so Stop could not end it either.
+ */
+private fun answer(socket: Socket): RedirectResult? {
+    socket.soTimeout = READ_MS
+    val reader = socket.getInputStream().bufferedReader()
+
+    val requestLine = try {
+        reader.readLine()
+    } catch (silent: SocketTimeoutException) {
+        null
+    } ?: return null
+
+    // Read to the end of the headers before replying. A close with unread bytes
+    // still in the receive buffer is an RST on Windows, and an RST discards the
+    // response — so the tab that had just authorised successfully would show a
+    // connection error instead of the page below.
+    runCatching {
+        while (true) {
+            if (reader.readLine().isNullOrEmpty()) break
+        }
+    }
+
     val target = requestLine.split(' ').getOrNull(1).orEmpty()
     val params = queryOf(target)
 
@@ -137,5 +175,18 @@ private fun pageFor(result: RedirectResult): String {
  * not six hundred wakeups doing nothing.
  */
 private const val POLL_MS = 500
+
+/**
+ * How long one connection has to say what it wants.
+ *
+ * A request that is coming has already been written by the time we accept, so
+ * this is only ever spent on a connection with nothing to say. Short, because
+ * the accept loop is serial and every silent preconnect costs this much before
+ * the real redirect behind it is looked at.
+ */
+private const val READ_MS = 1_000
+
+/** Room for the connections a browser opens around the one that matters. */
+private const val BACKLOG = 16
 
 private const val NANOS_PER_SECOND = 1_000_000_000L

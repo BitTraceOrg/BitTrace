@@ -1,6 +1,6 @@
 package org.bittrace.api.oauth
 
-import kotlinx.coroutines.CancellationException
+import org.bittrace.data.catching
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
@@ -20,6 +20,7 @@ import java.net.http.HttpRequest
 import java.net.http.HttpResponse
 import java.time.Duration
 import java.util.Base64
+import kotlin.time.Duration.Companion.milliseconds
 
 /**
  * Getting a token: the part with sockets, a browser and a clock.
@@ -127,7 +128,7 @@ class OAuthService(
 
         var wait = grant.intervalSeconds
         while (true) {
-            delay(wait * 1000)
+            delay((wait * 1000).milliseconds)
             if (grant.expiresAt?.isBefore(java.time.Instant.now()) == true) {
                 error("That device code expired before it was entered.")
             }
@@ -196,22 +197,6 @@ class OAuthService(
      * It ran on whichever thread called it, and the caller is the UI — so this
      * is the difference between a click and a frozen window.
      */
-    /**
-     * `runCatching`, minus the one exception it must never catch.
-     *
-     * `runCatching` swallows `CancellationException`, which turns Stop into a
-     * failed authorisation: the job completes normally, its completion handler
-     * sees no cause, and the tab reports an error for something the user asked
-     * for. Catching it also breaks structured concurrency, since a cancelled
-     * scope is supposed to keep unwinding.
-     */
-    private inline fun <T> catching(block: () -> T): Result<T> = try {
-        Result.success(block())
-    } catch (cancelled: CancellationException) {
-        throw cancelled
-    } catch (failure: Exception) {
-        Result.failure(failure)
-    }
 
     private suspend fun openBrowser(url: String): Result<Unit> = withContext(Dispatchers.IO) {
         runCatching {

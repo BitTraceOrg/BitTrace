@@ -64,10 +64,6 @@ fun jwtAssertion(auth: ApiAuth, issuedAt: Instant = Instant.now()): Result<Strin
     "$input.${sign(input, auth)}"
 }
 
-/** The signing input, exposed so a published JWT vector can be checked against it. */
-fun signingInput(headerJson: String, claimsJson: String): String =
-    "${base64Url(headerJson.toByteArray(Charsets.UTF_8))}.${base64Url(claimsJson.toByteArray(Charsets.UTF_8))}"
-
 /**
  * HMAC-SHA256 over the signing input, base64url.
  *

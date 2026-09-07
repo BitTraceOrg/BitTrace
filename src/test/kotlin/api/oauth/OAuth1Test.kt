@@ -1,5 +1,6 @@
 package org.bittrace.api.oauth
 
+import org.bittrace.ui.layouts.inspector.components.matches
 import org.bittrace.api.ApiAuth
 import org.bittrace.api.AUTH_OAUTH1
 import org.bittrace.api.SIG_HMAC_SHA1

@@ -245,10 +245,10 @@ private fun readObject(json: String): Map<String, String> = buildMap {
         var depth = 1
         while (depth > 0) {
             val token = parser.nextToken() ?: break
-            when {
-                token == JsonToken.START_OBJECT || token == JsonToken.START_ARRAY -> depth++
-                token == JsonToken.END_OBJECT || token == JsonToken.END_ARRAY -> depth--
-                token == JsonToken.FIELD_NAME && depth == 1 -> {
+            when (token) {
+                JsonToken.START_OBJECT, JsonToken.START_ARRAY -> depth++
+                JsonToken.END_OBJECT, JsonToken.END_ARRAY -> depth--
+                JsonToken.FIELD_NAME if depth == 1 -> {
                     val name = parser.currentName()
                     val value = parser.nextToken()
                     when {
@@ -260,6 +260,16 @@ private fun readObject(json: String): Map<String, String> = buildMap {
                         else -> Unit
                     }
                 }
+
+                JsonToken.NOT_AVAILABLE -> TODO()
+                JsonToken.FIELD_NAME -> TODO()
+                JsonToken.VALUE_EMBEDDED_OBJECT -> TODO()
+                JsonToken.VALUE_STRING -> TODO()
+                JsonToken.VALUE_NUMBER_INT -> TODO()
+                JsonToken.VALUE_NUMBER_FLOAT -> TODO()
+                JsonToken.VALUE_TRUE -> TODO()
+                JsonToken.VALUE_FALSE -> TODO()
+                JsonToken.VALUE_NULL -> TODO()
             }
         }
     }

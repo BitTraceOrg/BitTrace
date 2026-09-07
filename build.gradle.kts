@@ -14,6 +14,12 @@ plugins {
 group = "org.bittrace"
 version = "1.0-SNAPSHOT"
 
+// The version the *shipped* artifacts carry, which is not `version` above:
+// jpackage rejects a `-SNAPSHOT` suffix, and the MSI upgrade rules need a plain
+// `major.minor.patch`. Declared here so the installer version and the names of
+// the files in `build/dist` cannot drift apart.
+val appVersion = "1.0.0"
+
 // Jewel's standalone artifacts are versioned `<jewel>-<intellij-build>`; the
 // platform icons live in a separate repository on their own build numbers, and
 // the nearest published one to Jewel's is what we align everything onto.
@@ -214,7 +220,7 @@ compose.desktop {
             // app image (BitTrace.exe with a bundled JRE) needing no installer.
             targetFormats(TargetFormat.Msi, TargetFormat.Exe)
             packageName = "BitTrace"
-            packageVersion = "1.0.0"
+            packageVersion = appVersion
             description = "HTTP(S) traffic capture and inspection."
             vendor = "BitTrace"
             windows {
@@ -260,3 +266,92 @@ val checkJbr by tasks.registering {
 tasks.matching { it.name.startsWith("createDistributable") || it.name.startsWith("package") }
     .configureEach { dependsOn(checkJbr) }
 
+
+// ---------------------------------------------------------------------------
+// Distribution
+// ---------------------------------------------------------------------------
+//
+// Compose's own tasks each produce one artifact and leave it in its own folder
+// under `build/compose/binaries/`, which means shipping a release is four
+// commands and a hunt through four directories. The tasks below wrap that into
+// one, and put everything a user could download side by side under `build/dist`
+// with the version in the file name.
+//
+// The `Release` variants are the ones used deliberately: the debug ones bundle
+// a non-optimised build, and the whole point of these artifacts is that they
+// are what other people run.
+
+/** Where a release lands, ready to upload. */
+val distDir: Provider<Directory> = layout.buildDirectory.dir("dist")
+
+/**
+ * The no-installer build, zipped.
+ *
+ * `createReleaseDistributable` leaves a *directory* — `BitTrace.exe` beside the
+ * runtime image it needs — which is not something anyone can download. The exe
+ * does not run from anywhere else, so the folder travels as a unit or not at
+ * all, and that makes the archive the artifact rather than a convenience.
+ */
+val packagePortableZip by tasks.registering(Zip::class) {
+    group = "distribution"
+    description = "Zips the portable app image (BitTrace.exe plus its bundled runtime)."
+    from(tasks.named("createReleaseDistributable"))
+    archiveFileName.set("BitTrace-$appVersion-portable.zip")
+    // Staged next to the other binaries rather than in `dist`, so `dist` stays a
+    // Sync — able to delete a previous version's files — without racing this.
+    destinationDirectory.set(layout.buildDirectory.dir("compose/binaries/portable"))
+}
+
+/**
+ * Everything a Windows release ships, in one folder.
+ *
+ * Three artifacts, because they answer different questions:
+ *
+ *  - **`BitTrace-<version>.exe`** — the setup wizard. What a person downloads:
+ *    it asks where to install, and it makes the Start-menu entry and the
+ *    desktop shortcut the `windows { }` block above turns on.
+ *  - **`BitTrace-<version>.msi`** — the same install for administrators, which
+ *    is what group policy and `msiexec /qn` can deploy unattended. It upgrades
+ *    a prior install in place rather than sitting beside it, which is what the
+ *    fixed `upgradeUuid` buys.
+ *  - **`BitTrace-<version>-portable.zip`** — no installer, no registry, no
+ *    admin rights. Unzip and run, which is the only option on a locked-down
+ *    machine, and the one to reach for when capturing traffic on someone
+ *    else's box.
+ *
+ * A `Sync`, not a `Copy`: the destination is emptied first, so a stale artifact
+ * from an earlier version cannot sit in `build/dist` looking like part of this
+ * release.
+ *
+ * Windows only. jpackage builds the installer format of the host it runs on, so
+ * `packageReleaseExe` and `packageReleaseMsi` do not exist elsewhere — hence the
+ * check below rather than a confusing "task not found".
+ */
+val dist by tasks.registering(Sync::class) {
+    group = "distribution"
+    description = "Builds the setup wizard, the MSI and the portable zip into build/dist."
+
+    doFirst {
+        if (!org.gradle.internal.os.OperatingSystem.current().isWindows) {
+            error(
+                "`dist` builds Windows installers, and jpackage only builds for the host OS.\n" +
+                    "Run it on Windows, or use `packageReleaseDistributionForCurrentOS` here."
+            )
+        }
+    }
+
+    from(tasks.named("packageReleaseExe")) { include("*.exe") }
+    from(tasks.named("packageReleaseMsi")) { include("*.msi") }
+    from(packagePortableZip)
+    into(distDir)
+
+    doLast {
+        val out = distDir.get().asFile
+        logger.lifecycle("")
+        logger.lifecycle("BitTrace $appVersion — ${out.absolutePath}")
+        out.listFiles()
+            ?.sortedBy { it.name }
+            ?.forEach { logger.lifecycle("  %-40s %,d KB".format(it.name, it.length() / 1024)) }
+        logger.lifecycle("")
+    }
+}

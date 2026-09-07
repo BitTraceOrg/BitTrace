@@ -123,12 +123,20 @@ JBRs are `-nomod` builds and will not work; download a `jbrsdk` build from the
 [JetBrainsRuntime releases](https://github.com/JetBrains/JetBrainsRuntime/releases).
 
 ```bash
-./gradlew packageMsi -PjbrHome=<path-to-jbrsdk>
+./gradlew dist -PjbrHome=<path-to-jbrsdk>
 ```
 
-`packageExe` produces an installer, and `createDistributable` produces a
-runnable app image — `BitTrace.exe` with a bundled JRE, needing no installer at
-all.
+That builds everything a release ships and puts it in `build/dist`:
+
+| File | For |
+| --- | --- |
+| `BitTrace-<version>.exe` | The setup wizard — asks where to install, makes the Start-menu entry and desktop shortcut |
+| `BitTrace-<version>.msi` | The same install for `msiexec /qn` and group policy; upgrades a prior install in place |
+| `BitTrace-<version>-portable.zip` | No installer, no registry, no admin rights — unzip and run |
+
+Windows only: jpackage builds installers for the host OS and nothing else. The
+individual `packageReleaseExe`, `packageReleaseMsi` and
+`createReleaseDistributable` tasks are still there if you want one artifact.
 
 ## Layout
 

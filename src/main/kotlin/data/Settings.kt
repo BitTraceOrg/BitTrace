@@ -33,18 +33,30 @@ data class Settings(
      *  Legacy "dark"/"light" values are migrated by the ThemeManager. */
     val theme: String = "precision-dark",
     /**
-     * Flow-table row mode: "compact" (one line per flow) or "detailed" (a second
-     * line per flow carrying its timing ribbon). Read once when the traffic view
-     * is built — see [org.bittrace.components.TableMode].
-     */
-    val tableMode: String = "compact",
-    /**
      * Flow-table columns to show, by key. Columns are opt-in: anything not
      * listed is hidden. Empty (the default) means "the table's default set" —
      * kept out of the settings file so the defaults can gain a column without
      * every existing install pinning the old list.
      */
     val tableColumns: List<String> = emptyList(),
+    /**
+     * Who commits, for API-client projects.
+     *
+     * Blank falls back to the machine's own `~/.gitconfig`; blank in both places
+     * refuses the commit rather than inventing an identity, because a history
+     * attributed to `bittrace@localhost` is worse than one that would not start.
+     */
+    val gitAuthorName: String = "",
+    val gitAuthorEmail: String = "",
+    /**
+     * A personal access token for HTTPS remotes, keyed by nothing — one token
+     * covers every host you push to.
+     *
+     * Stored here in plain text, like everything else in this file, so scope it
+     * to the repositories you actually push. It is never committed: settings
+     * live beside the collections folder, not inside it.
+     */
+    val gitToken: String = "",
     /** Width of the API client's collections tree, in dp. */
     val apiTreeWidthDp: Float = 240f,
     /** Width of the API client's response pane when the layout is horizontal, in dp. */

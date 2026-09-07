@@ -20,6 +20,7 @@ version = "1.0-SNAPSHOT"
 val jewelVersion = "0.39.1-262.9437.29"
 val intellijIconsVersion = "262.9437.185"
 val kodeMirrorVersion = "0.3.6"
+val jgitVersion = "7.1.0.202411261347-r"
 
 repositories {
     google()
@@ -72,6 +73,29 @@ dependencies {
     // YAML for API-client collections, on kotlinx-serialization so request
     // models stay @Serializable like Settings and the HAR types.
     implementation("com.charleskorn.kaml:kaml:0.104.0")
+    // Git, for API-client projects. JGit rather than shelling out to `git`, so
+    // the feature works on a machine that has no git installed.
+    //
+    // `.http.apache` is deliberately absent: core's own `TransportHttp` runs on
+    // `HttpURLConnection`, and the Apache stack only adds NTLM and proxy auth
+    // this app has no use for. `.ssh.apache.agent` is what makes SSH remotes
+    // painless on Windows — it reaches the OpenSSH agent and Pageant through
+    // JNA, which is most of the size and worth it. `eddsa` is explicit because
+    // ed25519 is what `ssh-keygen` produces by default now, and without it key
+    // loading fails with "no such algorithm" rather than anything diagnosable.
+    //
+    // Note also what is *not* here: BouncyCastle. Its absence means an encrypted
+    // classic-PEM key cannot be read, which is a deliberate trade — the app
+    // never asks for a key passphrase, and the answer is ssh-agent.
+    implementation("org.eclipse.jgit:org.eclipse.jgit:$jgitVersion")
+    implementation("org.eclipse.jgit:org.eclipse.jgit.ssh.apache:$jgitVersion")
+    implementation("org.eclipse.jgit:org.eclipse.jgit.ssh.apache.agent:$jgitVersion")
+    implementation("net.i2p.crypto:eddsa:0.3.0")
+    // JGit logs through slf4j and nothing else on the classpath binds it, so
+    // without a provider every run opens with a "failed to load class" notice
+    // on stderr. Nothing here wants JGit's internal logging.
+    runtimeOnly("org.slf4j:slf4j-nop:2.0.16")
+
     // Public plugin API — shared with bundled and external plugins.
     implementation(project(":plugin-api"))
     testImplementation(kotlin("test"))
@@ -158,6 +182,34 @@ compose.desktop {
         }
 
         nativeDistributions {
+            // JGit, Apache MINA sshd and JNA reach for JDK modules nothing else
+            // in the app references, and jlink builds the runtime image from the
+            // modules it is told about. Left out, they fail *only* in the
+            // packaged app and *only* on the transport path — `gradlew run` uses
+            // the whole JBR and never shows it.
+            //
+            // The first seven come from asking jdeps directly:
+            //
+            //   jdeps --multi-release 24 --ignore-missing-deps --list-deps             //       <jgit, sshd and jna jars from the runtime classpath>
+            //
+            // which is the same question `suggestRuntimeModules` asks, minus its
+            // need for a packaging-capable JBR. The last two are there *because*
+            // jdeps cannot see them: both are reached through ServiceLoader and
+            // reflection, so no bytecode names them and static analysis reports
+            // nothing. `jdk.crypto.ec` supplies EC key exchange and the
+            // `ecdsa-sha2-nistp256` keys most SSH remotes negotiate;
+            // `jdk.unsupported` is JNA's `sun.misc.Unsafe`.
+            modules(
+                "java.logging",
+                "java.management",
+                "java.naming",
+                "java.rmi",
+                "java.security.jgss",
+                "java.sql",
+                "java.xml",
+                "jdk.crypto.ec",
+                "jdk.unsupported",
+            )
             // Msi + Exe installers; `createDistributable` also yields a runnable
             // app image (BitTrace.exe with a bundled JRE) needing no installer.
             targetFormats(TargetFormat.Msi, TargetFormat.Exe)
@@ -207,3 +259,4 @@ val checkJbr by tasks.registering {
 
 tasks.matching { it.name.startsWith("createDistributable") || it.name.startsWith("package") }
     .configureEach { dependsOn(checkJbr) }
+

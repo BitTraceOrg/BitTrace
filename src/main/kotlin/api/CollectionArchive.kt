@@ -42,7 +42,11 @@ fun zipDirectory(source: Path, target: Path): Result<Int> = runCatching {
     Files.newOutputStream(target).use { raw ->
         ZipOutputStream(raw).use { zip ->
             Files.walk(source).use { walk ->
-                walk.filter { it != source }.forEach { path ->
+                // `.git` is skipped: once projects are repositories, an
+                // unfiltered walk would put the entire history into every
+                // exported zip — megabytes of pack files, and every credential
+                // that was ever committed, in a file people mail to each other.
+                walk.filter { it != source && !it.any { part -> part.toString() == ".git" } }.forEach { path ->
                     val name = source.relativize(path).joinToString("/")
                     if (path.isDirectory()) {
                         zip.putNextEntry(ZipEntry("$name/"))

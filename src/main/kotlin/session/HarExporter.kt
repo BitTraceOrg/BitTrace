@@ -1,16 +1,15 @@
 package org.bittrace.session
 
+import org.bittrace.data.writeAtomically
 import com.fasterxml.jackson.core.JsonEncoding
 import com.fasterxml.jackson.core.JsonFactory
 import com.fasterxml.jackson.core.JsonGenerator
 import java.awt.EventQueue
 import java.io.BufferedOutputStream
-import java.nio.file.Files
 import java.nio.file.Path
-import java.nio.file.StandardCopyOption
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
-import org.bittrace.components.instantOf
+import org.bittrace.ui.instantOf
 import org.bittrace.data.CompleteRequestMessage
 import org.bittrace.data.CompleteResponseMessage
 import org.bittrace.data.InitialRequestData
@@ -61,44 +60,42 @@ class HarExporter(
         val flows = snapshot()
         if (flows.isEmpty()) return ExportResult(0, 0, "nothing to export")
 
-        val temp = path.resolveSibling("${path.fileName}.tmp")
         var written = 0
         var skipped = 0
 
         try {
-            path.parent?.let { Files.createDirectories(it) }
             val factory = JsonFactory()
-            BufferedOutputStream(Files.newOutputStream(temp), 64 * 1024).use { out ->
-                factory.createGenerator(out, JsonEncoding.UTF8).use { g ->
-                    g.writeStartObject()
-                    g.writeObjectFieldStart("log")
-                    g.writeStringField("version", "1.2")
-                    g.writeObjectFieldStart("creator")
-                    g.writeStringField("name", "BitTrace")
-                    g.writeStringField("version", APP_VERSION)
-                    g.writeEndObject()
+            writeAtomically(path) { stream ->
+                BufferedOutputStream(stream, 64 * 1024).use { out ->
+                    factory.createGenerator(out, JsonEncoding.UTF8).use { g ->
+                        g.writeStartObject()
+                        g.writeObjectFieldStart("log")
+                        g.writeStringField("version", "1.2")
+                        g.writeObjectFieldStart("creator")
+                        g.writeStringField("name", "BitTrace")
+                        g.writeStringField("version", APP_VERSION)
+                        g.writeEndObject()
 
-                    g.writeArrayFieldStart("entries")
-                    for (flow in flows) {
-                        // A flow whose response never arrived would export as
-                        // empty headers and invented timings — misleading, so
-                        // it is counted and left out instead.
-                        if (flow.response == null) {
-                            skipped++
-                            continue
+                        g.writeArrayFieldStart("entries")
+                        for (flow in flows) {
+                            // A flow whose response never arrived would export as
+                            // empty headers and invented timings — misleading, so
+                            // it is counted and left out instead.
+                            if (flow.response == null) {
+                                skipped++
+                                continue
+                            }
+                            writeEntry(g, flow)
+                            written++
                         }
-                        writeEntry(g, flow)
-                        written++
-                    }
-                    g.writeEndArray()
+                        g.writeEndArray()
 
-                    g.writeEndObject() // log
-                    g.writeEndObject()
+                        g.writeEndObject() // log
+                        g.writeEndObject()
+                    }
                 }
             }
-            Files.move(temp, path, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
         } catch (e: Exception) {
-            runCatching { Files.deleteIfExists(temp) }
             return ExportResult(written, skipped, e.message ?: e::class.simpleName)
         }
 

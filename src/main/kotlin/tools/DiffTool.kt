@@ -32,20 +32,20 @@ import org.bittrace.data.SessionStore
 import org.bittrace.data.TrafficRow
 import org.bittrace.plugin.format.BodyFormatter
 import org.bittrace.proxy.BodySide
-import org.bittrace.ui.Dropdown
+import org.bittrace.ui.components.Dropdown
 import org.bittrace.ui.P
-import org.bittrace.ui.PzText
-import org.bittrace.ui.Segment
-import org.bittrace.ui.SegmentedToggle
+import org.bittrace.ui.components.PzText
+import org.bittrace.ui.components.Segment
+import org.bittrace.ui.components.SegmentedToggle
 import org.bittrace.ui.Typo
-import org.bittrace.ui.VScrollbar
+import org.bittrace.ui.components.VScrollbar
 import org.bittrace.ui.bottomBorder
 import org.bittrace.ui.rightBorder
 
 /**
  * Compares two captured flows, one against the other.
  *
- * This does not host an [org.bittrace.components.Inspector] — not for want of
+ * This does not host an [org.bittrace.ui.layouts.inspector.Inspector] — not for want of
  * trying. The Inspector renders *one* flow and owns its own tab, formatter and
  * scroll state; two of them side by side would show two bodies at their own
  * scroll positions with nothing lining up, which is a split view rather than a
@@ -206,7 +206,7 @@ private fun mimeOf(row: TrafficRow, side: BodySide): String {
  * apart, which is the one thing this view exists to prevent.
  */
 @Composable
-private fun DiffView(diff: DiffResult) {
+internal fun DiffView(diff: DiffResult) {
     val hScroll = rememberScrollState()
     val listState = rememberLazyListState()
     val added = diff.rows.count { it.kind == DiffKind.ADDED }

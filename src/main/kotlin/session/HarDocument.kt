@@ -19,19 +19,6 @@ import kotlinx.serialization.Serializable
  */
 
 @Serializable
-class HarFile(val log: HarLog = HarLog())
-
-@Serializable
-class HarLog(
-    val version: String = "1.2",
-    val creator: HarCreator = HarCreator(),
-    val entries: List<HarEntry> = emptyList(),
-)
-
-@Serializable
-class HarCreator(val name: String = "", val version: String = "")
-
-@Serializable
 class HarEntry(
     val startedDateTime: String = "",
     val time: Double = -1.0,

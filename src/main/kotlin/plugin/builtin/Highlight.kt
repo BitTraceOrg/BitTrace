@@ -1,5 +1,6 @@
 package org.bittrace.plugin.builtin
 
+import org.bittrace.ui.components.editor.GRAPHQL_KEYWORDS
 import org.bittrace.plugin.format.Span
 import org.bittrace.plugin.format.TokenKind
 

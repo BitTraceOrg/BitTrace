@@ -9,7 +9,7 @@ import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.rememberWindowState
 import org.bittrace.ui.P
-import org.bittrace.ui.PzText
+import org.bittrace.ui.components.PzText
 import org.bittrace.ui.Typo
 import org.bittrace.ui.bottomBorder
 import org.jetbrains.jewel.window.DecoratedWindow

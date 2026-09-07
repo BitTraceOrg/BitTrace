@@ -67,7 +67,6 @@ class BundledCollectionActions : CollectionActionPlugin {
     }
 }
 
-
 /**
  * Copies [file] beside itself under the first free `name (n)` name.
  *

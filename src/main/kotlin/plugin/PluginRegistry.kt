@@ -1,6 +1,5 @@
 package org.bittrace.plugin
 
-import org.bittrace.plugin.Plugin
 import org.bittrace.plugin.collection.CollectionActionPlugin
 import org.bittrace.plugin.flow.FlowActionPlugin
 import org.bittrace.plugin.format.BodyFormatter

@@ -103,5 +103,4 @@ private fun jsString(value: String): String {
     return "'$escaped'"
 }
 
-
 private val BROWSER_MANAGED = setOf("host", "content-length", "connection")

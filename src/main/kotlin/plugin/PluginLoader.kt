@@ -3,8 +3,6 @@ package org.bittrace.plugin
 import java.net.URLClassLoader
 import java.util.ServiceLoader
 import org.bittrace.data.SettingsStore
-import org.bittrace.plugin.Plugin
-import org.bittrace.plugin.PluginHost
 import org.bittrace.ui.copyToClipboard as copyTextToClipboard
 
 /**

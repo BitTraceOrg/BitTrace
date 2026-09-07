@@ -38,10 +38,28 @@ request, complete response — and `SessionStore` merges them by flow id into on
 `TrafficRow`. The three late parts are Compose snapshot state, so a row already
 on screen fills in as frames arrive without any explicit refresh.
 
+A `CONNECT` is a flow of its own, on its own pair of tags: mitmproxy answers it
+without raising the request and response hooks, so a tunnel that is refused
+would otherwise leave no trace at all. `ConnectRequestData` converts into the
+same two request messages as anything else, so a tunnel is an ordinary row with
+`CONNECT` in the method column. Its id is unrelated to the ids of the requests
+that travel inside it; `clientConnectionId`, carried on both, is the link.
+
 **Bodies never travel with metadata.** They live in `BodyCache`, keyed by flow
 id and side, and reach the UI through a `(id, side) -> ByteArray?` lambda. That
 keeps `TrafficRow` small, lets the cache evict independently of the row list,
 and means anything that can produce bytes can feed the Inspector.
+
+A body past the sidecar's streaming threshold does not ride on its `Complete*`
+frame at all: it is forwarded chunk by chunk, and `StreamedBodies` reassembles
+it before it reaches the cache. Two things separate that path from the inline
+one. The bytes arrive **still `Content-Encoding`-encoded**, because mitmproxy's
+stream callback sees the wire rather than the decoded message, so they are
+inflated here. And capture is **best-effort**: the sidecar drops chunks rather
+than stalling the proxy's event loop behind a slow reader, and assembly stops at
+a fixed ceiling rather than letting one download size the heap. Either way the
+prefix is kept and the loss is logged, since what reaches the Inspector then
+looks like a whole body.
 
 ### Threading
 
@@ -63,19 +81,34 @@ results land back on the event thread.
 | `proxy/` | The sidecar: process, frame protocol, body cache, CA handling |
 | `session/` | HAR import and export |
 | `api/` | The API client's logic: request model, collections, history, sending, TLS, importers |
-| `components/` | Every composable with a single caller: the screens, and the widgets only one of them uses |
-| `ui/` | The shared widget vocabulary, the Jewel theme bridge, and the platform helpers |
+| `ui/` | Theme, type scale, platform helpers, presentation formatting |
+| `ui/components/` | The shared widget vocabulary, plus the window chrome every screen sits inside |
+| `ui/layouts/<screen>/` | One screen's entry composable, with `components/` beside it for the parts only that screen uses |
 | `plugin/` | Plugin discovery and the bundled plugins |
 
-**The line between `ui/` and `components/` is reuse, not subject matter.** A
-composable used from more than one place lives in `ui/`; one with a single
-caller lives in `components/`, next to the screen that owns it. So `DataGrid` is
-in `ui/` because the flow table and the log panel both build on it, while
-`FlowTable` and `Waterfall` are in `components/` because nothing else will ever
-want them. Screens are components by that rule too — `SettingsView` has exactly
-one caller.
+**The line is reuse, and it is now drawn by the folder.** A composable used from
+more than one screen lives in `ui/components/`; one that only its own screen
+will ever want lives in that screen's own `components/`. So `DataGrid` is shared
+because the flow table and the log panel both build on it, while `FlowTable` and
+`Waterfall` sit under `layouts/inspector/components/` because nothing else will
+ever want them.
 
-Each shared widget in `ui/` is its own file named after it — `Buttons.kt`,
+The four screens match the four rail entries:
+
+| Layout | Entry | Its own components |
+| --- | --- | --- |
+| `layouts/home/` | `Home` | — |
+| `layouts/inspector/` | `TrafficView`, and the `Inspector` the Forge also reuses | `FlowTable`, `OverviewBand`, `Waterfall`, `FlowPhases`, `FlowQuery`, `FlowExport`, `BodyScan` |
+| `layouts/forge/` | `ApiView` | `Tree`, `AuthTab`, `RequestSettingsTab`, `RequestHistoryTab`, `VariablesPane`, `ProjectToolbar`, `KvEditor`, `MethodPicker`, `GitDialogs`, `GitMenu`, `UnsavedChangesDialog` |
+| `layouts/settings/` | `SettingsView` | — |
+
+`Inspector` is the one component a layout owns that another layout imports: the
+Forge shows a response through the very same pane the traffic screen does, which
+is the point of it. Home and Settings have no `components/` folder because
+everything they draw is private to their one file; the folder appears when there
+is something to put in it.
+
+Each shared widget in `ui/components/` is its own file named after it — `Buttons.kt`,
 `CheckBox.kt`, `Dropdown.kt`, `SegmentedToggle.kt`, `TextInput.kt`, `PillTabs.kt`,
 `ChipRow.kt`, `Text.kt`, `Dot.kt` — so where a control lives is never a question.
 Most are a dozen lines over a Jewel component; the exceptions are the three
@@ -142,6 +175,17 @@ JetBrains' Compose Desktop implementation of the IntelliJ Int UI. Only its
 stable API is used: `Dropdown`, `LazyTree` and `SpeedSearchArea` are
 `@ExperimentalJewelApi` and are deliberately not, which is why the picker is a
 `ListComboBox` and `CollectionTree` is still hand-built.
+
+**One exception, opted into once:** `Palette.tooltipStyle` positions every
+tooltip in the app relative to its own button rather than to the cursor, which
+is the only way a hover tooltip does not end up touching whatever the button
+sits on depending on where the pointer entered it. There is no stable
+`TooltipPlacement` constructor — every one Jewel or Compose Foundation offers
+is `@ExperimentalFoundationApi` or `@ExperimentalJewelApi`, unlike `Dropdown` or
+`LazyTree`, which had a stable replacement to fall back to. The `@OptIn` is
+scoped to that one private function, in the one file whose job is exactly this
+kind of concession, so nothing outside `JewelBridge.kt` needs to know the type
+exists.
 
 `ui/JewelBridge.kt` is the whole of the coupling. It renders the active
 `Palette` as a Jewel `ThemeDefinition` plus a `ComponentStyling`, and
@@ -314,23 +358,247 @@ as fetch(), Copy response body) exercises the seam.
 
 Column filters answer three different shapes of question and `GridColumn` has
 one mechanism for each. **Typed text** is a substring of the cell. **Facets** are
-a tick list, ORed within a column and ANDed across them — derived from the data
-by default, but a column may declare a fixed `facets` list instead, which is
-what Code, Method and Type do: a list built from what has arrived cannot offer
+a tick list, ORed within a column and ANDed across them, and *only* a column
+whose values are a closed set gets one — Code, Method and Type do (Method's comes from `data/HttpMethods.kt`, the
+app's one list — the API client's picker and the search band's facet column read
+the same one, so the three panels cannot disagree about what a method is): a list built from what has arrived cannot offer
 `5xx` until a 5xx has happened, which is exactly when you stop needing to ask
 for it. **`numeric`** is a comparison, for Size, because "larger than 100 KB" is
 neither a substring nor a set; the operand accepts units (`64kb`) since the
 column displays them.
 
-**Body search** is the question none of those can answer, because every column
-filters metadata the grid already shows. Ctrl+F opens a strip between the
-waterfall and the grid — `components/BodySearch.kt` — searching request or
-response bodies as plain text or as a regex. The scan is debounced and runs on
-`Dispatchers.Default`: it decodes every cached body in the table, which is cheap
-for a hundred rows and not for ten thousand. A body that has been evicted simply
-does not match, since a hit that cannot be inspected is worse than a miss. The
-waterfall deliberately keeps showing everything — an overview narrowed by a
-search is no longer an overview.
+**The header funnels and the band edit one state.** Code, Method and Type offer
+the same three sets of ticks in both places, and held separately they were two
+filters that agreed only until somebody used either: ticking 4xx in a header
+left the band showing nothing selected, and the grid then applied the two
+independently, so the row count answered to a query neither panel had drawn.
+`GridFacetBinding` is the seam — the band's `FlowQuery` keeps the state, the
+header popup reads and writes it through the binding, and `applyGridFilters`
+never sees those ticks because the owner has already applied them.
+`FACET_COLUMNS` names the correspondence next to the groups themselves. It is
+keyed by column key, so a renamed column would not fail to compile — it would
+quietly stop editing the query — and a test walks the catalog to catch that.
+
+Tick lists used to be derived from the captured rows when a column did not
+declare one, which is wrong in both directions: on a closed set it could only
+offer what had already arrived, and on an open one like host it grew without
+bound, turning the popup into a scrolling directory you had to search before you
+could filter with it. Open sets now get the text field, which is the right tool
+for a value you describe rather than pick — and the host set people actually
+wanted lives in the overview band's Host column, with cross-filtered counts.
+
+## The overview band
+
+`layouts/inspector/components/OverviewBand.kt` is the strip above the grid, and it has two modes
+that morph into each other in place. Idle it is the waterfall: 66dp of lanes with
+the brush strip beneath.
+
+**The lanes are the brush seen close up.** `Waterfall` holds no scroll state of
+its own — its window *is* the brushed range, a minute wide by default because
+that is what the strip selects by default, and as wide as you drag it after
+that. A fixed minute there would have quietly contradicted a wider selection,
+showing its first minute while the strip drew the whole thing highlighted; and
+because the lanes now fill the window edge to edge, they no longer draw the
+window on themselves — a highlight covering the entire canvas says nothing.
+Gridlines are quarters of whatever the window is, so they stay four readable
+units instead of becoming an hour of hairlines at 15s apiece. `computeTimeline` takes
+the capture's origin rather than re-basing on the rows it is handed, because
+filtering hands it a subset and a re-based axis would mean something different
+from one frame to the next.
+
+**The strip is in both modes, in the same place.** It replaced the waterfall's
+old scroll map, which drew the same picture and answered a strictly smaller
+question: both were "the whole capture, with the part you are looking at marked
+on it", but only one of them can also say which part that is. Scrolling the
+lanes back an hour and filtering to that hour were separate acts that always
+happened together, so they are now one — brushing seeds the lanes' pin rather
+than driving their window every frame, which leaves the lanes still draggable
+from wherever the brush put them. Pressing `/` grows it to 250dp and the
+lanes fade out for a query bar, a six-column facet grid and a time-window brush
+strip.
+
+The reason it is one component rather than a timeline plus a search panel is the
+brush strip. **Searching does not replace the timeline; it turns the timeline
+into an input.** The same waterfall comes back compressed at the bottom as
+something you drag a window on — no lanes this time, because that read is
+density (*when was it busy*) rather than per-flow. A search box in place of the
+band would have thrown away the one picture that says *when* to look.
+
+The strip runs on one gesture handler rather than a drag detector beside a tap
+detector, because where a press *lands* is what decides its meaning and two
+competing detectors would have had to agree on which of them owned it. Inside an
+existing window the press moves that window, measured from the window as it
+stood when the drag began so a move does not accumulate per-frame rounding;
+anywhere else it draws a new one, and a press too narrow to be a brush clears
+it. A click inside the window is therefore a zero-length move that leaves it
+exactly as it was — the window is not something you lose by touching it.
+
+The band edits exactly one value, `layouts/inspector/components/FlowQuery.kt`, which is
+also the only thing the grid consults. That matters because the query is
+rendered in four places at once — the grid's rows, the lanes, the strip's own
+bars and the status bar — and four independent filters eventually disagree,
+whereas four views of one value cannot. Within a facet the values are ORed
+(ticking `4xx` and `5xx` means either, since no flow is both); across facets they
+are ANDed unless the joiner says otherwise. Free text and the time window are
+always ANDed on top: an OR between "in this second" and "mentions this host" is
+not a question anybody asks.
+
+**Counts are cross-filtered.** Each column's numbers apply every *other* facet,
+the text and the window, but ignore that column's own selection. Computed the
+obvious way, a count reads zero for every value you have not picked — which is
+precisely when it needed to tell you what picking it would do. A zero-count row
+stays clickable for the same reason: it is how you clear your way back to it,
+and a row that cannot be pressed reads as broken rather than empty.
+
+Downstream, the query filters the grid, marks its own free-text needle inside
+the URL cells (`FlowHighlight` — filtering says *which* rows matched, not
+*where*), names itself in the status bar next to `n flows of total`, and picks
+the grid's empty message: nothing captured and everything filtered out look
+identical from inside the grid and need opposite advice.
+
+**Free text searches the bodies**, on the side the toggle beside the field
+picks, and the metadata as well — a text search that could no longer find
+`/orders` in a URL would have stopped answering the question it used to. Every
+other criterion is metadata the grid already holds, so filtering is a pure
+predicate over rows in memory; the body scan is the one part that cannot be, and
+it stays outside the model in `layouts/inspector/components/BodyScan.kt`, running off the UI
+thread behind a 250ms debounce and handing `matches` a set of ids to test in
+constant time. `null` from that scan means "not yet", not "no matches" — read as
+a miss it would blank the grid on every keystroke and fill it back in a beat
+later. An evicted body simply does not match, since a hit you cannot then open
+in the inspector sends you looking for something the app no longer has.
+
+## Git-backed projects
+
+Every API-client project is a git repository, initialised on first sight of it.
+`git/GitService.kt` wraps JGit — chosen over shelling out so the feature works on
+a machine with no git installed — and every call suspends, hops to IO itself and
+returns `Result`, with JGit's exceptions translated into a sealed `GitFailure`
+so the UI branches on a type instead of matching a message.
+
+**Project variables.** Each project holds a `.bittrace-variables.yaml` — a
+key/value table shown as a **Variables** row under it — and `{{name}}` in a URL,
+a param, a header, a cookie, a body or an auth field is replaced on the way out
+(`api/Variables.kt`). Substitution happens at send time and is **never written
+back**: the saved request keeps the `{{name}}` form, which is what makes it
+worth committing, and the send history records it that way too so an entry stays
+replayable.
+
+Four rules, each with a test:
+
+- **An unknown name resolves to nothing**, and there is no special case for "the
+  project has no variables at all" — that is simply the case where every name is
+  unknown. A short-circuit there would make a draft behave differently from a
+  saved request for no reason a user could see. Because that hole is invisible
+  on the wire, `TrackedVariables` records every name it could not supply and the
+  send logs them as a warning; the substitution itself stays a pure function.
+- **A draft resolves against the project it would be saved into.** It has no
+  file of its own, so it used to belong to no project and every `{{name}}` in it
+  came out empty — while the same request, saved one click later, worked. The
+  Forge keeps `ApiClientState.draftHome` in step with its tree selection, which
+  is the very path `save` reads to decide where the draft lands, so "where will
+  this go" and "which variables apply" cannot give different answers.
+- **Values are not rescanned.** A variable whose value contains `{{...}}` yields
+  those characters, so a substitution's result never depends on another
+  variable and a cycle is impossible rather than merely handled.
+- **Substitution happens on two paths, not one.** `ApiSender.execute` covers the
+  send; `ApiClientState.authorize`/`refreshToken` cover the authorise, because
+  `OAuthTokens` fingerprints a token on the grant, client id, token URL, scope
+  and audience. Resolve on one side only and the lookup misses every time —
+  which surfaces not as an error but as a client that silently re-authorises on
+  every send.
+
+The variables file is **committed**, unlike the credentials sidecar it replaced.
+That is a deliberate trade, made explicitly: one place to change a value, at the
+cost of the guarantee that nothing sensitive reaches the remote. Anything typed
+into a variable goes to the remote with the project, which the publish dialog
+says in as many words. The leading dot in the filename is load-bearing —
+`holdsRequestDirectly` reads a plain `.yaml` directly inside a project folder as
+the pre-project layout, and `adoptLegacyLayout` would sweep every project into a
+folder called "My project".
+
+**A tab is a sum type.** `EditorTab` is either a `RequestTab` or a
+`VariablesTab`, rather than one class with a mode flag. The difference is not
+stylistic: with a flag, a variables tab carries a placeholder `ApiRequest` and a
+path, so `CollectionStore.save(path, request)` is *writable* — and `saveAll`
+reaches it with no compile error, putting a six-line YAML file where a project
+folder was. Split, that call cannot be expressed. `CollectionStore.save` also
+now refuses any path that is not at a request's depth, so the same mistake from
+any other caller is a failed `Result` rather than a lost file.
+
+Several things in `GitService` are there to stop a failure that does not throw:Several things in `GitService` are there to stop a failure that does not throw:
+
+- **`.gitattributes` plus a pinned `core.autocrlf=false`.** `CollectionStore`
+  writes LF. Inheriting `autocrlf=true` means git checks out CRLF, every request
+  file reads as modified forever, and the dirty count never reaches zero.
+- **Filepatterns joined with `/`.** They are POSIX paths whatever the platform;
+  `relativize().toString()` gives backslashes on Windows, and `addFilepattern`
+  then matches nothing and commits zero files without erroring.
+- **No cached `Repository` handles.** An open repository holds `.git/index` and
+  the pack files, and on Windows that makes the folder unmovable — which is what
+  renaming or deleting a project does.
+- **Pinned discovery.** `findGitDir()` walks upward and could find a repository
+  above the collections root; `readEnvironment()` would let a stray `GIT_DIR`
+  hijack every call.
+- **One mutex per project**, or concurrent operations leave a stale
+  `.git/index.lock` for the user to find and delete by hand.
+- **A first commit at init**, so `branches`, `log`, `status` and ahead/behind
+  never meet an unborn branch.
+- **`pull` is fast-forward only.** A conflicted merge writes `<<<<<<<` into YAML
+  that `RequestYaml.decode` then refuses, breaking every affected request at
+  once. BitTrace is not a merge tool: it refuses and says where to go.
+
+`git/GitStore.kt` caches a `GitState` per project as Compose state. There is no
+file watcher anywhere in this app, so it is refreshed from four places: the
+`onChanged` hook `CollectionStore` now calls after a mutation (the store still
+knows nothing about git — it only announces that it touched a file), after every
+git operation whether or not it succeeded, on API-view entry, and on window
+focus. That last one is the only trigger that catches a change BitTrace did not
+make, which in practice means `git pull` in a terminal.
+
+**The branch is a combo box on the project row**, not a chip that opens a
+picker: choosing from a list is what the control does, so it looks and behaves
+like the app's other list pickers rather than a label that turns out to be a
+button that turns out to open a dialog. Its options therefore have to exist
+before it is clicked, which is why `GitState` carries the branch names — one
+extra ref walk inside a repository the status read already has open, against a
+second round trip. Remote-tracking branches appear only where no local branch
+of that name exists: the two are the same branch, and offering both would make
+picking one a coin toss with different consequences.
+
+**Checkout and pull are blocked while a tab is dirty.** They rewrite files under
+open editors, and reloading afterwards would discard the edits silently. The
+guard offers Save all, and there is no Discard button because the operation can
+simply wait. Afterwards `ApiClientState.reconcile` puts tabs back in step:
+unchanged files are left alone so a no-op checkout does not recompose the
+editor, and a request that does not exist on the new branch keeps its content,
+loses its path and becomes an unsaved draft rather than being closed.
+
+**Publishing** a project that has no remote asks for a URL, adds it as `origin`,
+pushes and records the tracking config — and rolls the remote back if the push
+fails, because the menu offers Publish only while there is no remote, so a
+mistyped URL would otherwise leave a project that can never be published again
+from the app. Two things JGit does not do on its own are handled here: a
+rejected push is an ordinary result carrying a status rather than an exception,
+so the statuses are checked or "Pushed to origin" gets printed for something the
+remote threw out; and `PushCommand` has no `setUpstream`, so the two config keys
+are written by hand, without which the branch reads as untracked forever and
+Pull refuses immediately after a successful publish.
+
+Auth is split by kind. SSH uses `~/.ssh` and the agent, with a passphrase
+provider that always declines — the default tries to prompt on a console a
+windowed app does not have, so a locked key would hang forever instead of
+failing explainably. HTTPS uses a token from Settings, keyed by host, with
+per-forge username conventions. The SSH factory is attached per transport rather
+than through `SshSessionFactory.setInstance()`, because that is a JVM global the
+plugins loaded into this same JVM could also reach.
+
+One packaging note: JGit, sshd and JNA reach for JDK modules nothing else here
+references, and jlink builds the image from what it is told. The list in
+`nativeDistributions` came from `jdeps --list-deps` over those jars, plus
+`jdk.crypto.ec` and `jdk.unsupported`, which jdeps structurally cannot see
+because both are reached by ServiceLoader and reflection. Missing modules fail
+only in the packaged app and only on the transport path.
 
 ## The API client
 
@@ -390,6 +658,17 @@ ordinary flows and appear in the grid.
   `LoopbackServer.kt` is a one-shot `ServerSocket` bound to `127.0.0.1` — a raw
   socket rather than `com.sun.net.httpserver`, which keeps `jdk.httpserver` out
   of the module set packaging computes.
+
+  **The listener is written against what browsers actually do, not against one
+  well-formed request.** A browser opens several connections to a host it is
+  about to fetch from and may hold one of them silent, so: the accepted socket
+  carries its own read timeout (`accept`'s does not cover it, and a thread
+  parked in a socket read ignores cancellation, so a silent preconnect once
+  blocked the redirect behind it for the whole authorisation and Stop could not
+  end it either); the backlog has room for the extras; a connection that resets
+  mid-read is skipped rather than failing the flow; and the request is read to
+  the end of its headers before the page is written, because closing with unread
+  bytes buffered is an RST that discards the response.
 
   **Tokens are memory-only.** `OAuthTokens` is keyed by a fingerprint of the
   config that earned the token — client, endpoint, grant, scope — not by request

@@ -1,5 +1,6 @@
 package org.bittrace.data
 
+import org.bittrace.ui.instantOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -8,7 +9,6 @@ import kotlinx.serialization.builtins.MapSerializer
 import kotlinx.serialization.builtins.serializer
 import java.nio.file.Files
 import java.nio.file.Path
-import java.nio.file.Paths
 import java.time.LocalDate
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -100,7 +100,7 @@ class ActivityStore(private val file: Path = defaultPath()) {
     }
 
     private fun dayOf(startedDateTime: String): LocalDate? =
-        org.bittrace.components.instantOf(startedDateTime)
+        instantOf(startedDateTime)
             ?.atZone(ZoneId.systemDefault())
             ?.toLocalDate()
 
@@ -110,10 +110,6 @@ class ActivityStore(private val file: Path = defaultPath()) {
         private val ISO: DateTimeFormatter = DateTimeFormatter.ISO_LOCAL_DATE
         private val SERIALIZER = MapSerializer(String.serializer(), Int.serializer())
 
-        fun defaultPath(): Path {
-            val base = System.getenv("APPDATA")?.let { Paths.get(it) }
-                ?: Paths.get(System.getProperty("user.home"), ".config")
-            return base.resolve("BitTrace").resolve("activity.json")
-        }
+        fun defaultPath(): Path = configFile("activity.json")
     }
 }

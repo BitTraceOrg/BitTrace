@@ -3,15 +3,14 @@ package org.bittrace.data
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
-import java.nio.file.Files
 import java.nio.file.Path
-import java.nio.file.Paths
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
+import kotlin.time.Duration.Companion.milliseconds
 
 /**
  * A persistent, JSON-backed settings store.
@@ -41,33 +40,28 @@ class SettingsStore(private val file: Path = defaultPath()) {
         val snapshot = settings
         saveJob?.cancel()
         saveJob = scope.launch {
-            delay(400)
+            delay(400.milliseconds)
             save(snapshot)
         }
     }
 
-    private fun load(): Settings = try {
-        if (Files.exists(file)) json.decodeFromString(Settings.serializer(), Files.readString(file))
-        else Settings()
-    } catch (e: Exception) {
-        System.err.println("[settings] load failed, using defaults: $e")
-        Settings()
+    private fun load(): Settings = readOrDefault(file, Settings(), tag = "settings") {
+        json.decodeFromString(Settings.serializer(), it)
     }
 
     private fun save(s: Settings) {
+        // Atomic, like every other store. It was a plain write until this pass:
+        // a crash between opening the file and finishing it left a truncated
+        // `settings.json`, and the app would start on defaults having silently
+        // lost everything the user had set.
         try {
-            file.parent?.let { Files.createDirectories(it) }
-            Files.writeString(file, json.encodeToString(Settings.serializer(), s))
+            writeAtomically(file, json.encodeToString(Settings.serializer(), s))
         } catch (e: Exception) {
             System.err.println("[settings] save failed: $e")
         }
     }
 
     companion object {
-        fun defaultPath(): Path {
-            val base = System.getenv("APPDATA")?.let { Paths.get(it) }
-                ?: Paths.get(System.getProperty("user.home"), ".config")
-            return base.resolve("BitTrace").resolve("settings.json")
-        }
+        fun defaultPath(): Path = configFile("settings.json")
     }
 }

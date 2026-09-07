@@ -1,5 +1,6 @@
 package org.bittrace.proxy
 
+import org.bittrace.data.Platform
 import java.io.FileNotFoundException
 import java.nio.file.Files
 import java.nio.file.Path
@@ -22,8 +23,7 @@ object SidecarBinary {
     /** Classpath folder the binary is packaged under. */
     const val RESOURCE_DIR = "/sidecar"
 
-    val isWindows: Boolean
-        get() = System.getProperty("os.name").startsWith("Windows", ignoreCase = true)
+    val isWindows: Boolean get() = Platform.isWindows
 
     /** "MITMConnect.exe" on Windows, "MITMConnect" elsewhere. */
     val filename: String

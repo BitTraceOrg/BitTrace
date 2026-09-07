@@ -1,5 +1,6 @@
 package org.bittrace.proxy
 
+import org.bittrace.data.Platform
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.Paths
@@ -52,9 +53,8 @@ data class CertInfo(
  */
 object CertificateAuthority {
 
-    private val osName = System.getProperty("os.name").orEmpty().lowercase()
-    private val isWindows = osName.startsWith("win")
-    private val isMac = osName.contains("mac") || osName.contains("darwin")
+    private val isWindows get() = Platform.isWindows
+    private val isMac get() = Platform.isMac
 
     /** mitmproxy's default confdir. */
     val dir: Path = Paths.get(System.getProperty("user.home"), ".mitmproxy")

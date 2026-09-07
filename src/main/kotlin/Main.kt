@@ -21,6 +21,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
@@ -140,6 +141,10 @@ fun main() = application {
             onCloseRequest = { service.stop(); exitApplication() },
             title = "BitTrace",
             state = windowState,
+            // The packaged app gets its icon from the installer; a `gradlew run`
+            // has no installer, so without this the window and its task-bar
+            // entry come up as the default Java cup.
+            icon = painterResource("icon.png"),
         ) {
             App(
                 store, service, settings, themeManager, logs, formatters, importers, collectionActions, flowActions, activity,

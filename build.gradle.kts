@@ -226,6 +226,11 @@ compose.desktop {
             windows {
                 menu = true
                 shortcut = true
+                // Six sizes in the one file, 16 through 256: Explorer, the task
+                // bar, Alt-Tab and the installer each reach for a different one,
+                // and a single-size icon gets scaled into mush by whichever of
+                // them misses.
+                iconFile.set(project.file("packaging/icon.ico"))
                 // Stable UUID so MSI upgrades replace the prior install.
                 upgradeUuid = "6f3d9b2e-1c7a-4e5b-9a3d-2b1c4e5f6a7b"
             }

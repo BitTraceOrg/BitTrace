@@ -563,7 +563,7 @@ private fun <T> FilterFunnel(
 ) {
     Box {
         // A plain icon button, not a selectable one: a selected state would
-        // recolour the glyph and, before §6.4 was applied, ring it as well.
+        // recolour the glyph and ring it as well.
         // Whether the column is filtered is already said by its header label,
         // which turns accent — saying it twice in one 26dp strip is noise.
         IconActionButton(
@@ -865,9 +865,9 @@ private fun <T> GridRow(
     // rather than at the row's leading edge.
     var menuAt by remember { mutableStateOf(Offset.Zero) }
     // Rows carry no rule of their own: separation is zebra striping, and
-    // selection is the whole row filled rather than an edge bar beside it
-    // (DESIGN.MD §9.3). A per-row border under a 24px row reads as noise once
-    // there are hundreds of them.
+    // selection is the whole row filled rather than an edge bar beside it. A
+    // per-row border under a 24px row reads as noise once there are hundreds
+    // of them.
     val background = when {
         selected -> P.sel
         // Above hover and striping but below selection: a marked row should

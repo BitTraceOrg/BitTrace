@@ -17,9 +17,9 @@ import org.bittrace.plugin.theme.ThemeSpec
  * the dark accent and `blue(4)` the light one.
  */
 
-// Every dark shade below is a value from DESIGN.MD §2, placed at the index the
-// semantic role reads. The comment on each line names that role, so a change to
-// the spec has exactly one place to land.
+// Every dark shade below is placed at the index the semantic role reads. The
+// comment on each line names that role, so a change has exactly one place to
+// land.
 private val darkGray = Ramp.of(
     listOf(
         Color(0xFF131416), // 1  window backdrop

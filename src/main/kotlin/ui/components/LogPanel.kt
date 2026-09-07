@@ -59,7 +59,7 @@ private val LogGridStyle: GridStyle
     )
 
 /**
- * Floating log panel (DESIGN.md §6.11) — a bottom-docked overlay holding a grid
+ * Floating log panel — a bottom-docked overlay holding a grid
  * of log lines from every source the app has: the proxy sidecar, session
  * import/export, the plugin loader, the Forge and its git layer. Toggled from
  * the status-bar LOGS button

@@ -144,7 +144,7 @@ private fun Palette.themeDefinition(dark: Boolean): ThemeDefinition {
         panelBackground = panel,
         toolwindowBackground = chrome,
     )
-    // Inter for chrome, JetBrains Mono for payload (DESIGN.MD §3). Both ship
+    // Inter for chrome, JetBrains Mono for payload. Both ship
     // with Jewel, so these come from its own factories rather than from whatever
     // the platform happens to call sans and mono — and `P.Ui` / `P.Mono` read
     // back off these, so there is one answer for each family.
@@ -744,7 +744,7 @@ private fun Palette.editorTabStyle(dark: Boolean): TabStyle {
 }
 
 /**
- * Editor tabs, at DESIGN.MD §12's 34dp rather than Int UI's 40.
+ * Editor tabs, at 34dp rather than Int UI's 40.
  *
  * Taller than the section tabs below them, which is right — these are the
  * top-level strip and those are a subdivision — but not so tall that the strip
@@ -829,16 +829,16 @@ private fun Palette.iconButtonStyle(dark: Boolean): IconButtonStyle {
         IconButtonColors.dark(
             background = Color.Transparent, backgroundDisabled = Color.Transparent,
             // The rail is the only selected icon button, so this is the tool
-            // stripe's active fill: a solid neutral step (DESIGN.MD §8/§10),
+            // stripe's active fill: a solid neutral step,
             // not a 16%-alpha accent wash — that was all but invisible against
             // a light chrome.
             backgroundSelected = stripeOn, backgroundSelectedActivated = stripeOn,
             // Pressed matches hovered and focus adds nothing, so clicking an
             // icon button does not flash a fill under the pointer. Hover still
-            // reads (§6.4); the toggled-on fill still marks the rail's view.
+            // reads; the toggled-on fill still marks the rail's view.
             backgroundPressed = rowHover, backgroundHovered = rowHover,
             backgroundFocused = Color.Transparent,
-            // No border in any state. DESIGN.MD §6.4: an icon button is a
+            // No border in any state: an icon button is a
             // square with a radius and a fill — hover and toggled-on are carried
             // by the background, never by an outline drawn round the glyph.
             border = Color.Transparent, borderDisabled = Color.Transparent,
@@ -850,16 +850,16 @@ private fun Palette.iconButtonStyle(dark: Boolean): IconButtonStyle {
         IconButtonColors.light(
             background = Color.Transparent, backgroundDisabled = Color.Transparent,
             // The rail is the only selected icon button, so this is the tool
-            // stripe's active fill: a solid neutral step (DESIGN.MD §8/§10),
+            // stripe's active fill: a solid neutral step,
             // not a 16%-alpha accent wash — that was all but invisible against
             // a light chrome.
             backgroundSelected = stripeOn, backgroundSelectedActivated = stripeOn,
             // Pressed matches hovered and focus adds nothing, so clicking an
             // icon button does not flash a fill under the pointer. Hover still
-            // reads (§6.4); the toggled-on fill still marks the rail's view.
+            // reads; the toggled-on fill still marks the rail's view.
             backgroundPressed = rowHover, backgroundHovered = rowHover,
             backgroundFocused = Color.Transparent,
-            // No border in any state. DESIGN.MD §6.4: an icon button is a
+            // No border in any state: an icon button is a
             // square with a radius and a fill — hover and toggled-on are carried
             // by the background, never by an outline drawn round the glyph.
             border = Color.Transparent, borderDisabled = Color.Transparent,
@@ -923,11 +923,10 @@ private fun Palette.titleBarStyle(dark: Boolean): TitleBarStyle {
             dropdownHoveredBackground = rowHover, dropdownPressedBackground = accentFill,
         )
     }
-    // 30dp rather than Int UI's 40. DESIGN.MD §12 puts the main toolbar at 40,
-    // but that assumes the toolbar the spec describes — a project chip, a
-    // capture widget, a transport cluster. Ours carries a menu strip and an
-    // endpoint, and at 40 the band reads as empty. 30 also matches the
-    // tool-window header height everything below it uses (§5.2).
+    // 30dp rather than Int UI's 40. That 40 assumes a toolbar carrying a
+    // project chip, a capture widget, a transport cluster. Ours carries a menu
+    // strip and an endpoint, and at 40 the band reads as empty. 30 also matches
+    // the tool-window header height everything below it uses.
     val metrics = TitleBarMetrics.titleBarDefaults(
         height = 30.dp,
         // The caption buttons have to come down with the bar, or Windows draws

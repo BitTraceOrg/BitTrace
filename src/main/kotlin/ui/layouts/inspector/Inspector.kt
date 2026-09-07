@@ -71,7 +71,7 @@ import org.bittrace.ui.topBorder
 import org.jetbrains.jewel.ui.component.ToggleableChip
 
 /**
- * Request | Response inspector (DESIGN.md §6.10), with a persisted divider.
+ * Request | Response inspector, with a persisted divider.
  *
  * [stacked] flips the two panes from side-by-side to request-above-response —
  * what the inspector wants when it is docked to the right edge, where height is
@@ -780,7 +780,7 @@ private fun Kv(pairs: List<Pair<String, String>>) {
 @Composable
 private fun Section(title: String, first: Boolean = false) {
     // A group heading, so it outranks the rows under it: same size, more weight
-    // (DESIGN.MD §9.8 puts detail-group titles at Inter 12 600). It used to be a
+    // (detail-group titles are Inter 12 600). It used to be a
     // step *smaller* than the rows it headed, which read as a caption rather
     // than a heading.
     //

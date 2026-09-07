@@ -8,9 +8,9 @@ import androidx.compose.ui.unit.sp
 import org.jetbrains.jewel.foundation.theme.JewelTheme
 
 /**
- * The type scale (DESIGN.MD §3.1).
+ * The type scale.
  *
- * Seven steps, and the sizes are the spec's rather than a ratio: a design
+ * Seven steps, with chosen sizes rather than a ratio: a design
  * language that names 11.5 for a segmented item and 12.5 for a table cell is
  * making a decision, and deriving those from a base would only approximate it.
  * What the scale buys is that there are seven of them and not the nine ad-hoc

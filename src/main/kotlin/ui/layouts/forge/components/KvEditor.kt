@@ -103,7 +103,7 @@ private fun KvRowEditor(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         // Wide enough for the checkbox's own footprint. Jewel draws a 16dp box
-        // inside a 24dp target (DESIGN.MD §9.15); a 14dp column squeezed it,
+        // inside a 24dp target; a 14dp column squeezed it,
         // which is what made it look undersized rather than merely small.
         Box(Modifier.width(ENABLE_WIDTH), contentAlignment = Alignment.Center) {
             // The blank row has nothing to enable yet, so it shows no box. The

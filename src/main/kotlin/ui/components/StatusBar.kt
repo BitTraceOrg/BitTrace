@@ -269,7 +269,7 @@ private fun StatusCell(
     content: @Composable () -> Unit,
 ) {
     val background = when {
-        // DESIGN.MD §9.12: a status widget that is on is filled, not recoloured.
+        // A status widget that is on is filled, not recoloured.
         // It used to be a solid accent with the label inverted, which cannot
         // work now the label carries its own semantic colour.
         active -> P.pressed

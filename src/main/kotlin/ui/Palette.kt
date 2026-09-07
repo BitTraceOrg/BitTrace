@@ -58,8 +58,8 @@ object P {
     /**
      * The two families, from Jewel.
      *
-     * DESIGN.MD §3 asks for exactly Inter for chrome and JetBrains Mono for
-     * payload, and Jewel ships both — so these read off the theme's own styles
+     * Exactly Inter for chrome and JetBrains Mono for payload, and Jewel ships
+     * both — so these read off the theme's own styles
      * rather than falling back to whatever the platform calls sans and mono.
      * They are composable getters for that reason: the theme is the source.
      */

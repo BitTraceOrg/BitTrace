@@ -103,7 +103,7 @@ private fun computeTimeline(rows: List<TrafficRow>, origin: Long?): Timeline {
 }
 
 /**
- * The Chrome-DevTools-style overview band (DESIGN.md §6.7), drawn with a Skia
+ * The Chrome-DevTools-style overview band, drawn with a Skia
  * [Canvas]: per-flow bars packed into lanes on a shared time axis, wait +
  * download split, red for errors. Click a bar to select the flow.
  *

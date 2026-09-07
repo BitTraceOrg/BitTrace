@@ -45,12 +45,12 @@ data class Palette(
     // -----------------------------------------------------------------------
     // Semantic roles
     //
-    // The indices below are the design language's, not a guess — see DESIGN.MD
-    // §2. Light and dark read different indices, which is normal: a ramp runs
+    // The indices below are the design language's, not a guess. Light and dark
+    // read different indices, which is normal: a ramp runs
     // darkest-first in both, so the end a role reads from is what flips.
     //
     // One thing worth knowing before changing these: in a dark theme borders are
-    // *lighter* than the surface they divide (§2.2), the opposite of Int UI's
+    // *lighter* than the surface they divide, the opposite of Int UI's
     // own dark scheme. That is deliberate — content sits at the bottom of the
     // ramp so it reads as something you look into, and every division above it
     // steps up.
@@ -83,7 +83,7 @@ data class Palette(
 
     /**
      * What you type into: text-field interiors, the body editor, the segmented
-     * control's trough (DESIGN.MD §2.1).
+     * control's trough.
      *
      * Not the same as [bg], even though the two coincide in a dark theme. A
      * light theme puts content on the window surface but an input on white, and

@@ -91,7 +91,7 @@ val CONTENT_KINDS = listOf("html", "css", "js", "json", "xml", "img", "font", "m
  */
 fun columnCatalog(): List<Col> = defaultColumns() + optionalColumns()
 
-/** Keys shown when nothing has been chosen (DESIGN.md §6.8). */
+/** Keys shown when nothing has been chosen. */
 val DEFAULT_COLUMN_KEYS: List<String> = defaultColumns().map { it.key }
 
 /**
@@ -106,7 +106,7 @@ fun columnsFor(enabledKeys: List<String>): List<Col> {
     return chosen.ifEmpty { defaultColumns() }
 }
 
-/** The default column set (DESIGN.md §6.8). `#` is not filterable. */
+/** The default column set. `#` is not filterable. */
 fun defaultColumns(): List<Col> = listOf(
     Col("id", "#", 36f, end = true, filterable = false, value = { it.rowCount.toString() }) {
         CellText(it.rowCount.toString(), P.faint)

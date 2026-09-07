@@ -139,10 +139,10 @@ throwing, so a half-arrived flow renders fine.
 
 ### The design language
 
-`DESIGN.MD` is the authority — it pins every colour, size and role by value, and
-this section only says where those values live in the code. Colour is in the
-ramps a theme plugin supplies (`:plugin-api`'s `Palette`, §2); type is `ui/Typo`
-(§3); component sizes are Jewel's, which already match §4 and most of §12.
+The design language pins every colour, size and role by value; this section says
+where those values live in the code. Colour is in the ramps a theme plugin
+supplies (`:plugin-api`'s `Palette`); type is `ui/Typo`; component sizes are
+Jewel's own, which already match what the app asks for.
 
 Int UI, as Jewel ships it. **Nothing in the app sets a corner size, a control
 height or a padding on a Jewel component** — those are part of a component's

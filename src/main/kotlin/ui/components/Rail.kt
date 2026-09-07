@@ -53,7 +53,7 @@ private fun RailItem(
 ) {
     val on = nav == key
     // No divider between items and no accent edge: the stripe marks the active
-    // tool with a filled 30x30 button and nothing else (DESIGN.MD §8).
+    // tool with a filled 30x30 button and nothing else.
     Box(
         Modifier.fillMaxWidth().padding(vertical = 1.dp),
         contentAlignment = Alignment.Center,

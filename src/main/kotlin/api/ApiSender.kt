@@ -83,14 +83,22 @@ class ApiSender {
      * coroutine cancellation and would leave the Cancel button lying.
      */
     suspend fun execute(
-        request: ApiRequest,
+        raw: ApiRequest,
         settings: ResolvedSettings,
         marker: String?,
         viaProxy: Boolean,
         port: Int,
         /** Tokens this session has obtained; consulted for an OAuth 2.0 request. */
         tokens: OAuthTokens? = null,
+        /** The project's variables, for `{{name}}`. Empty for a request in no project. */
+        variables: Map<String, String> = emptyMap(),
     ): SendOutcome {
+        // Substituted here and nowhere else on this path. This is the last point
+        // at which the whole request is intact and unread, so one call covers the
+        // URL, the headers, the cookies, the body and every send-time auth field
+        // — and the caller keeps the `{{name}}` form, which is what gets saved
+        // and what the history records.
+        val request = raw.resolved(variables)
         val url = withAuthQuery(buildUrl(request), request.auth, settings.urlEncoding)
         // A file body is read once here so the cached copy, the size and the
         // publisher all agree; an outsized one streams straight from disk.

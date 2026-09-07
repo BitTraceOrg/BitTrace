@@ -319,9 +319,6 @@ fun authTypeLabel(type: String): String = when (type) {
     else -> type
 }
 
-/** Methods offered in the picker; the field itself accepts anything. */
-val HTTP_METHODS = listOf("GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS")
-
 /**
  * Turns a display name into a file name.
  *

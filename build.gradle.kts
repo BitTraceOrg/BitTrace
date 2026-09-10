@@ -12,13 +12,13 @@ plugins {
 }
 
 group = "org.bittrace"
-version = "0.1.1-SNAPSHOT"
+version = "0.1.2-SNAPSHOT"
 
 // The version the *shipped* artifacts carry, which is not `version` above:
 // jpackage rejects a `-SNAPSHOT` suffix, and the MSI upgrade rules need a plain
 // `major.minor.patch`. Declared here so the installer version and the names of
 // the files in `build/dist` cannot drift apart.
-val appVersion = "0.1.1"
+val appVersion = "0.1.2"
 
 // Jewel's standalone artifacts are versioned `<jewel>-<intellij-build>`; the
 // platform icons live in a separate repository on their own build numbers, and
@@ -179,6 +179,30 @@ compose.desktop {
 
         // Both `run` and the runtime image are built from this JDK.
         jbrHome?.let { javaHome = it }
+
+        // Eight-byte object headers instead of twelve.
+        //
+        // The saving is not four bytes an object, because objects are aligned to
+        // eight and the padding often eats it. Measured on this runtime, four
+        // million of each shape:
+        //
+        //     no fields          16 -> 8    two refs          24 -> 16
+        //     one int            16 -> 16   two ints + a ref  24 -> 24
+        //
+        // So it pays where the size lands just over an alignment boundary and
+        // does nothing otherwise. Worth having — a Compose app is full of small
+        // two-reference objects — but note what it does *not* help: `Span` is
+        // two ints and a reference, so the 409,827 of them a 2 MB JSON body
+        // produces are 24 bytes each either way. Nothing here should be read as
+        // a fix for that; the way to spend less on spans is to make fewer.
+        //
+        // A product flag on the JetBrains Runtime this builds against (verified
+        // on 25.0.4.1: `{product lp64_product}`, default false), so it needs no
+        // `UnlockExperimentalVMOptions`. It was experimental in 24, where an
+        // unguarded `-XX:+UseCompactObjectHeaders` refuses to start the VM
+        // rather than being ignored — reachable here only by pointing `jbrHome`
+        // at an older runtime.
+        jvmArgs += "-XX:+UseCompactObjectHeaders"
 
         // Skip ProGuard for the release build — kotlinx.serialization + Skiko
         // don't survive default minification without extra rules, and we want a

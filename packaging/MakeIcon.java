@@ -17,19 +17,29 @@ public class MakeIcon {
             + " BL=" + (src.getRGB(0,src.getHeight()-1)>>>24)
             + " BR=" + (src.getRGB(src.getWidth()-1,src.getHeight()-1)>>>24));
 
-        // Trim fully transparent margins so the fox fills the square evenly.
-        int minX=src.getWidth(), minY=src.getHeight(), maxX=-1, maxY=-1;
-        for (int y=0;y<src.getHeight();y++) for (int x=0;x<src.getWidth();x++)
-            if ((src.getRGB(x,y)>>>24) > 8) { if(x<minX)minX=x; if(x>maxX)maxX=x; if(y<minY)minY=y; if(y>maxY)maxY=y; }
-        BufferedImage trimmed = src.getSubimage(minX, minY, maxX-minX+1, maxY-minY+1);
-        System.out.println("trimmed to " + trimmed.getWidth() + "x" + trimmed.getHeight());
+        BufferedImage square;
+        if (src.getWidth() == src.getHeight()) {
+            // Already square, so it was composed as an icon and its margins are
+            // somebody's decision. Trimming and re-padding would silently
+            // re-frame it — the fox would grow and the breathing room shrink to
+            // whatever the constant below happens to say.
+            square = src;
+            System.out.println("already square; framing left alone");
+        } else {
+            // Trim fully transparent margins so the art fills the square evenly.
+            int minX=src.getWidth(), minY=src.getHeight(), maxX=-1, maxY=-1;
+            for (int y=0;y<src.getHeight();y++) for (int x=0;x<src.getWidth();x++)
+                if ((src.getRGB(x,y)>>>24) > 8) { if(x<minX)minX=x; if(x>maxX)maxX=x; if(y<minY)minY=y; if(y>maxY)maxY=y; }
+            BufferedImage trimmed = src.getSubimage(minX, minY, maxX-minX+1, maxY-minY+1);
+            System.out.println("trimmed to " + trimmed.getWidth() + "x" + trimmed.getHeight());
 
-        // Pad to a square with ~6% breathing room, centred. Never stretched.
-        int side = (int)(Math.max(trimmed.getWidth(), trimmed.getHeight()) * 1.12);
-        BufferedImage square = new BufferedImage(side, side, BufferedImage.TYPE_INT_ARGB);
-        Graphics2D g = square.createGraphics();
-        g.drawImage(trimmed, (side-trimmed.getWidth())/2, (side-trimmed.getHeight())/2, null);
-        g.dispose();
+            // Pad to a square with ~6% breathing room, centred. Never stretched.
+            int side = (int)(Math.max(trimmed.getWidth(), trimmed.getHeight()) * 1.12);
+            square = new BufferedImage(side, side, BufferedImage.TYPE_INT_ARGB);
+            Graphics2D g = square.createGraphics();
+            g.drawImage(trimmed, (side-trimmed.getWidth())/2, (side-trimmed.getHeight())/2, null);
+            g.dispose();
+        }
 
         Path outPng = Paths.get(a[1]), outIco = Paths.get(a[2]);
         Files.createDirectories(outPng.getParent());

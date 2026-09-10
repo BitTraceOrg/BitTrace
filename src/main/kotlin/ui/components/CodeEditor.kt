@@ -10,11 +10,15 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.monkopedia.kodemirror.basicsetup.basicSetup
+import com.monkopedia.kodemirror.state.Compartment
+import com.monkopedia.kodemirror.state.TransactionSpec
 import com.monkopedia.kodemirror.state.extensionListOf
 import com.monkopedia.kodemirror.state.readOnly
 import com.monkopedia.kodemirror.view.KodeMirror
@@ -121,9 +125,17 @@ fun CodeEditor(
  */
 @Composable
 fun CodeView(value: String, modifier: Modifier = Modifier, contentType: String = "") {
-    key(contentType, P.palette) {
+    // Only the palette rebuilds the session here. The language does not: it
+    // lives in a compartment, which is CodeMirror's own answer to a setting
+    // that changes over the life of an editor, and it is reconfigured in place
+    // below. Paging a flow's body tabs changes the content type on almost every
+    // switch — Hex declares none at all — and rebuilding for that threw away
+    // the whole editor (state, viewport, search panel) and built another to
+    // show text that had not changed.
+    key(P.palette) {
         val language = languageFor(contentType)
         val appearance = editorAppearance()
+        val languageSlot = remember { Compartment() }
 
         val session = rememberEditorSession(
             doc = value,
@@ -131,12 +143,29 @@ fun CodeView(value: String, modifier: Modifier = Modifier, contentType: String =
                 *listOfNotNull(
                     basicSetup,
                     appearance,
-                    language.extension,
+                    languageSlot.of(language.extension),
                     readOnly.of(true),
                     editable.of(false),
                 ).toTypedArray(),
             ),
         )
+        // What the compartment currently holds. Tracked rather than derived
+        // from the state, because the session exposes the configuration as
+        // extensions rather than as the language that produced them — and
+        // comparing content types instead would reconfigure for a change from
+        // one JSON media type to another, which is the same language.
+        val configured = remember { mutableStateOf(language) }
+        LaunchedEffect(language) {
+            // Identity, not equality: `languageFor` hands back one shared
+            // instance per language, so two calls agree exactly when the
+            // language is unchanged.
+            if (language !== configured.value) {
+                configured.value = language
+                session.dispatch(
+                    TransactionSpec(effects = listOf(languageSlot.reconfigure(language.extension))),
+                )
+            }
+        }
         LaunchedEffect(value) {
             if (session.state.doc.toString() != value) session.setDoc(value)
         }

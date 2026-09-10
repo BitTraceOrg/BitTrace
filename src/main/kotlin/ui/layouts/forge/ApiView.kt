@@ -103,8 +103,8 @@ import org.bittrace.ui.components.EDITABLE_LIMIT
 import org.bittrace.ui.FileDialogs
 import org.bittrace.ui.components.GhostButton
 import org.bittrace.ui.P
-import org.bittrace.ui.components.PaneHeader
-import org.bittrace.ui.components.PillTabs
+import org.bittrace.ui.components.TabContent
+import org.bittrace.ui.components.TabContentSwitcher
 import org.bittrace.ui.components.PrimaryButton
 import org.bittrace.ui.components.PzText
 import org.bittrace.ui.components.SplitPane
@@ -163,8 +163,6 @@ fun ApiView(
         OAuthService(state.tokens, proxyPort = { settings.settings.proxyPort }, viaProxy = { service.isRunning })
     }
 
-    var tab by remember { mutableStateOf("Params") }
-    var sideTab by remember { mutableStateOf("Projects") }
     var notice by remember { mutableStateOf<String?>(null) }
 
     /**
@@ -325,131 +323,132 @@ fun ApiView(
 
     Row(Modifier.fillMaxSize().background(P.bg)) {
         // --- projects / history ---
-        Column(Modifier.width(treeWidth).fillMaxHeight().background(P.panel).rightBorder(P.line)) {
-            PaneHeader {
-                PillTabs(listOf("Projects", "History"), sideTab) { sideTab = it }
-            }
-
-            if (sideTab == "History") {
-                HistoryList(
-                    entries = history.entries,
-                    modifier = Modifier.weight(1f).fillMaxWidth(),
-                    onOpen = { entry ->
-                        // Opened as a fresh draft: history is a record of what
-                        // was sent, not a file to save back over.
-                        state.open(entry.request, null)
-                        selectedPath = null
-                        notice = null
-                    },
-                    onRemove = { history.remove(it) },
-                )
-                return@Column
-            }
-
-            // Plugin menu items, translated into the plain label-and-lambda the
-            // tree understands. Built here rather than in the tree because this
-            // is where the collection store, the notice strip and a scope to
-            // reload on all already exist — the three things an action's
-            // context is made of.
-            val scope = rememberCoroutineScope()
-            val actionContext = remember(collections) {
-                object : CollectionActionContext {
-                    override fun refresh() {
-                        scope.launch { withContext(Dispatchers.IO) { collections.reload() } }
-                    }
-
-                    override fun notify(message: String) {
-                        report(message, "info")
-                    }
-                }
-            }
-
-            ProjectToolbar(
-                selected = selectedNode,
-                collections = collections,
-                git = git,
-                prompts = prompts,
-                onNew = { node -> createUnder(node) },
-                onDelete = { node -> deleteNode(node) },
-            )
-
-            CollectionTree(
-                nodes = collections.tree,
-                selected = selectedPath,
-                modifier = Modifier.weight(1f).fillMaxWidth(),
-                onOpen = { node ->
-                    collections.read(node)
-                        .onSuccess { state.open(it, node.path); selectedPath = node.path; notice = null }
-                        .onFailure { report("Could not read ${node.name}: ${it.message}") }
-                },
-                onOpenVariables = { node ->
-                    collections.projectOf(node.path)?.let { project ->
-                        state.openVariables(project)
-                        selectedPath = node.path
-                        notice = null
-                    }
-                },
-                onSelectFolder = { selectedPath = it.path },
-                onBadge = { node ->
-                    // Only projects carry one, and only once the repo is known.
-                    (node as? ProjectNode)?.let { project ->
-                        val state = git.stateOf(project.path)
-                        state.label?.let { label ->
-                            TreeBadge(
-                                value = label,
-                                // A detached HEAD has no branch to be selected,
-                                // so it is a readout until one is created.
-                                options = if (state.detached) emptyList() else state.branches,
-                                dot = !state.clean,
-                                onSelect = { picked -> switchTo(project.path, picked) },
-                            )
-                        }
-                    }
-                },
-                onMenuItems = { node ->
-                    // Before `targetOf`, which has no kind for this and no
-                    // business gaining one: a fourth `CollectionTargetKind`
-                    // would be a source-incompatible change for every plugin
-                    // with an exhaustive `when` over it.
-                    if (node is VariablesNode) return@CollectionTree emptyList()
-                    val target = targetOf(node)
-                    val plugins = collectionActions
-                        .flatMap { plugin -> plugin.actionsFor(target) }
-                        // Stable across plugins: a plugin orders its own items
-                        // with `order`, and equal orders keep load order, so
-                        // installing one cannot reshuffle another's.
-                        .sortedBy { it.order }
-                        .map { action ->
-                            TreeMenuItem(action.label, action.enabled) { action.perform(actionContext) }
-                        }
-                    // The host's own come first, above whatever plugins add.
-                    val host = createItems(node, collections, scope, ::report) { made ->
-                        selectedPath = made
-                    } + archiveItems(node, collections, window, scope, ::report) +
-                        gitItems(node, git, prompts)
-                    host + plugins
-                },
-                onRename = { node, name ->
-                    collections.rename(node, name)
-                        .onSuccess { moved ->
-                            // Keep the open request pointing at its file, and
-                            // keep its display name in step with the rename.
-                            if (state.openPath == node.path) {
-                                state.open(state.request.copy(name = name), moved)
+        TabContentSwitcher(
+            tabs = listOf(
+                TabContent("Projects") {
+                    Column(Modifier.fillMaxSize()) {
+                    // Plugin menu items, translated into the plain label-and-lambda the
+                    // tree understands. Built here rather than in the tree because this
+                    // is where the collection store, the notice strip and a scope to
+                    // reload on all already exist — the three things an action's
+                    // context is made of.
+                    val scope = rememberCoroutineScope()
+                    val actionContext = remember(collections) {
+                        object : CollectionActionContext {
+                            override fun refresh() {
+                                scope.launch { withContext(Dispatchers.IO) { collections.reload() } }
                             }
-                            if (selectedPath == node.path) selectedPath = moved
-                            notice = null
+
+                            override fun notify(message: String) {
+                                report(message, "info")
+                            }
                         }
-                        .onFailure { report(it.message ?: "Rename failed.") }
+                    }
+
+                    ProjectToolbar(
+                        selected = selectedNode,
+                        collections = collections,
+                        git = git,
+                        prompts = prompts,
+                        onNew = { node -> createUnder(node) },
+                        onDelete = { node -> deleteNode(node) },
+                    )
+
+                    CollectionTree(
+                        nodes = collections.tree,
+                        selected = selectedPath,
+                        modifier = Modifier.weight(1f).fillMaxWidth(),
+                        onOpen = { node ->
+                            collections.read(node)
+                                .onSuccess { state.open(it, node.path); selectedPath = node.path; notice = null }
+                                .onFailure { report("Could not read ${node.name}: ${it.message}") }
+                        },
+                        onOpenVariables = { node ->
+                            collections.projectOf(node.path)?.let { project ->
+                                state.openVariables(project)
+                                selectedPath = node.path
+                                notice = null
+                            }
+                        },
+                        onSelectFolder = { selectedPath = it.path },
+                        onBadge = { node ->
+                            // Only projects carry one, and only once the repo is known.
+                            (node as? ProjectNode)?.let { project ->
+                                val state = git.stateOf(project.path)
+                                state.label?.let { label ->
+                                    TreeBadge(
+                                        value = label,
+                                        // A detached HEAD has no branch to be selected,
+                                        // so it is a readout until one is created.
+                                        options = if (state.detached) emptyList() else state.branches,
+                                        dot = !state.clean,
+                                        onSelect = { picked -> switchTo(project.path, picked) },
+                                    )
+                                }
+                            }
+                        },
+                        onMenuItems = { node ->
+                            // Before `targetOf`, which has no kind for this and no
+                            // business gaining one: a fourth `CollectionTargetKind`
+                            // would be a source-incompatible change for every plugin
+                            // with an exhaustive `when` over it.
+                            if (node is VariablesNode) return@CollectionTree emptyList()
+                            val target = targetOf(node)
+                            val plugins = collectionActions
+                                .flatMap { plugin -> plugin.actionsFor(target) }
+                                // Stable across plugins: a plugin orders its own items
+                                // with `order`, and equal orders keep load order, so
+                                // installing one cannot reshuffle another's.
+                                .sortedBy { it.order }
+                                .map { action ->
+                                    TreeMenuItem(action.label, action.enabled) { action.perform(actionContext) }
+                                }
+                            // The host's own come first, above whatever plugins add.
+                            val host = createItems(node, collections, scope, ::report) { made ->
+                                selectedPath = made
+                            } + archiveItems(node, collections, window, scope, ::report) +
+                                gitItems(node, git, prompts)
+                            host + plugins
+                        },
+                        onRename = { node, name ->
+                            collections.rename(node, name)
+                                .onSuccess { moved ->
+                                    // Keep the open request pointing at its file, and
+                                    // keep its display name in step with the rename.
+                                    if (state.openPath == node.path) {
+                                        state.open(state.request.copy(name = name), moved)
+                                    }
+                                    if (selectedPath == node.path) selectedPath = moved
+                                    notice = null
+                                }
+                                .onFailure { report(it.message ?: "Rename failed.") }
+                        },
+                        onDelete = { node -> deleteNode(node) },
+                    )
+                        collections.error?.let {
+                            Box(Modifier.fillMaxWidth().padding(10.dp)) {
+                                PzText(it, color = P.err, style = Typo.caption, family = P.Ui)
+                            }
+                        }
+                    }
                 },
-                onDelete = { node -> deleteNode(node) },
-            )
-            collections.error?.let {
-                Box(Modifier.fillMaxWidth().padding(10.dp)) {
-                    PzText(it, color = P.err, style = Typo.caption, family = P.Ui)
-                }
-            }
-        }
+                TabContent("History") {
+                    HistoryList(
+                        entries = history.entries,
+                        modifier = Modifier.fillMaxSize(),
+                        onOpen = { entry ->
+                            // Opened as a fresh draft: history is a record of what
+                            // was sent, not a file to save back over.
+                            state.open(entry.request, null)
+                            selectedPath = null
+                            notice = null
+                        },
+                        onRemove = { history.remove(it) },
+                    )
+                },
+            ),
+            modifier = Modifier.width(treeWidth).fillMaxHeight().background(P.panel).rightBorder(P.line),
+        )
 
         VerticalSplitter { delta ->
             settings.update { it.copy(apiTreeWidthDp = (it.apiTreeWidthDp + delta.value).coerceIn(160f, 480f)) }
@@ -492,8 +491,8 @@ fun ApiView(
                     // it silently rendered the body — a hazard its own comment
                     // recorded rather than removed. Pairing each name with what
                     // it draws makes an unnamed tab impossible to write.
-                    val pages: List<Pair<String, @Composable () -> Unit>> = listOf(
-                        "Params" to {
+                    val pages = listOf(
+                        TabContent("Params") {
                             KvTab(state.request.params, "param") { rows ->
                                 // Encoded the way this request will be sent, so
                                 // the URL above shows what actually goes out —
@@ -502,32 +501,26 @@ fun ApiView(
                                 state.edit { it.copy(params = rows, url = urlWithParams(it.url, rows, encoding)) }
                             }
                         },
-                        "Headers" to {
+                        TabContent("Headers") {
                             KvTab(state.request.headers, "header") { rows ->
                                 state.edit { it.copy(headers = rows) }
                             }
                         },
-                        "Cookies" to {
+                        TabContent("Cookies") {
                             KvTab(state.request.cookies, "cookie") { rows ->
                                 state.edit { it.copy(cookies = rows) }
                             }
                         },
-                        "Body" to { BodyTab(state, window, ::report) },
-                        "Auth" to { AuthTab(state, oauth) },
-                        "Settings" to { RequestSettingsTab(state, settings.settings) },
-                        "History" to { RequestHistoryTab(state, collections, git) },
+                        TabContent("Body") { BodyTab(state, window, ::report) },
+                        TabContent("Auth") { AuthTab(state, oauth) },
+                        TabContent("Settings") { RequestSettingsTab(state, settings.settings) },
+                        TabContent("History") { RequestHistoryTab(state, collections, git) },
                     )
 
                     // The builder is a pane like any other, so it gets a pane
                     // header: title first, then its sections. The send result
                     // belongs to the response and lives in that header instead.
-                    PaneHeader(title = "Request") {
-                        PillTabs(pages.map { it.first }, tab, Modifier.weight(1f)) { tab = it }
-                    }
-
-                    Box(Modifier.weight(1f).fillMaxWidth()) {
-                        pages.firstOrNull { it.first == tab }?.second?.invoke()
-                    }
+                    TabContentSwitcher(pages, Modifier.weight(1f), title = "Request")
 
                     notice?.let {
                         Box(Modifier.fillMaxWidth().background(P.panel).topBorder(P.line).padding(10.dp)) {

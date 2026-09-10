@@ -2,6 +2,7 @@ package org.bittrace.ui.components
 
 import org.bittrace.ui.ChipShape
 import org.bittrace.ui.Typo
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -14,6 +15,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -24,6 +26,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 
@@ -81,7 +84,18 @@ fun MenuBar(menus: List<Menu>, modifier: Modifier = Modifier) {
 
     Row(modifier.fillMaxHeight().clientRegion("menu-bar"), verticalAlignment = Alignment.CenterVertically) {
         Spacer(Modifier.width(8.dp))
-        Dot(P.accent, 7)
+        // The app's own mark, where a plain accent square used to sit. Not
+        // decorative: the title bar is drawn by Jewel rather than by Windows, so
+        // this is the only place in the frame the application names itself.
+        //
+        // 16dp inside a 30dp bar (see `TitleBarMetrics` in `ui/JewelBridge.kt`)
+        // — the icon's own artwork carries its margins, so it does not want
+        // padding of its own on top.
+        Image(
+            painter = painterResource("icon.png"),
+            contentDescription = null,
+            modifier = Modifier.size(16.dp),
+        )
         Spacer(Modifier.width(8.dp))
         menus.forEach { menu ->
             MenuButton(

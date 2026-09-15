@@ -28,7 +28,7 @@ went.
   status, method, type, host, TLS and outcome at the same time.
 - **Body search** across every captured body, decoded and debounced off the UI
   thread, with request/response sides selectable.
-- **An inspector** with Overview, Body, Cookies, Headers, Raw, Hex and Timing
+- **An inspector** with Overview, Body, Cookies, Headers, Raw and Timing
   views, pluggable body formatters, and a persisted split. The same pane renders
   captured flows, imported HAR entries and API client responses.
 - **A waterfall and phase timeline** for where a request actually spent its

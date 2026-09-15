@@ -103,14 +103,14 @@ fun Inspector(
         Pane(
             modifier,
             "Request", null, BodySide.REQUEST, row, bodyProvider, formatters,
-            tabs = listOf("Overview", "Headers", "Body", "Form", "Cookies", "Raw", "Hex"), default = "Overview",
+            tabs = listOf("Overview", "Headers", "Body", "Form", "Cookies", "Raw"), default = "Overview",
         )
     }
     val response: @Composable (Modifier) -> Unit = { modifier ->
         Pane(
             modifier,
             "Response", responseTrailing, BodySide.RESPONSE, row, bodyProvider, formatters,
-            tabs = listOf("Overview", "Body", "Cookies", "Headers", "Raw", "Hex", "Timing"), default = "Body",
+            tabs = listOf("Overview", "Body", "Cookies", "Headers", "Raw", "Timing"), default = "Body",
         )
     }
 
@@ -169,8 +169,8 @@ private fun Pane(
     // for the next flow too.
     var smartRaw by remember { mutableStateOf(false) }
     // The tabs are views over one flow, not independent pages, so this is the
-    // shared-body form: the code view below survives every switch between Body,
-    // Raw and Hex instead of being torn down and rebuilt per tab. The pane title
+    // shared-body form: the code view below survives every switch between Body
+    // and Raw instead of being torn down and rebuilt per tab. The pane title
     // names the pane, so it is a heading rather than one more label in the strip
     // beside it.
     TabContentSwitcher(
@@ -208,7 +208,7 @@ private fun Pane(
         // find state or scrollbars the pane used to hoist for them survive here.
         // The other tabs are still one scrolling column.
         val vertical = rememberScrollState()
-        val monoTab = tab == "Body" || tab == "Raw" || tab == "Hex"
+        val monoTab = tab == "Body" || tab == "Raw"
 
         Column(Modifier.fillMaxSize()) {
             Box(Modifier.weight(1f).fillMaxWidth()) {
@@ -220,16 +220,16 @@ private fun Pane(
                     // the body from the source instead, which is always all of
                     // it. Selection within a row still works.
                     //
-                    // The three tabs decide *what* to show and share the one
-                    // view that shows it. Composing a code view per branch gave
-                    // each tab an editor of its own, so paging Body → Raw → Hex
-                    // tore down a KodeMirror and built another every time; with
-                    // the call site hoisted, the editor survives the switch and
-                    // only its document and its language change.
-                    val content = when (tab) {
-                        "Body" -> bodyContent(row, side, bodyProvider, active, mime)
-                        "Raw" -> rawContent(row, side, bodyProvider, smartRaw, active, mime)
-                        else -> hexContent(row, side, bodyProvider, formatters)
+                    // Both tabs decide *what* to show and share the one view
+                    // that shows it. Composing a code view per branch gave each
+                    // tab an editor of its own, so paging Body → Raw tore down a
+                    // KodeMirror and built another every time; with the call
+                    // site hoisted, the editor survives the switch and only its
+                    // document and its language change.
+                    val content = if (tab == "Body") {
+                        bodyContent(row, side, bodyProvider, active, mime)
+                    } else {
+                        rawContent(row, side, bodyProvider, smartRaw, active, mime)
                     }
                     when (content) {
                         is MonoContent.Note -> Pad(content.text)
@@ -738,40 +738,6 @@ private fun SmartViewButton(on: Boolean, modifier: Modifier, onToggle: () -> Uni
         PzText("Smart view", style = Typo.micro, family = P.Ui, softWrap = false)
     }
 }
-
-@Composable
-private fun hexContent(
-    row: TrafficRow,
-    side: BodySide,
-    bodyProvider: (String, BodySide) -> ByteArray?,
-    formatters: List<BodyFormatter>,
-): MonoContent {
-    val bytes = bodyProvider(row.id, side)
-    if (bytes == null || bytes.isEmpty()) return MonoContent.Note("body: none")
-
-    val hex = formatters.firstOrNull { it.id == HEX_FORMATTER }
-        ?: return MonoContent.Note("the hex formatter ($HEX_FORMATTER) is not loaded")
-
-    // Off the UI thread and cached, like every other body. Shown as plain text:
-    // a hex dump is columns of digits, and no language describes it — the
-    // formatter's own offset-column highlighting went with the move to a code
-    // view, and colouring a dump by guessing at a language would be worse than
-    // leaving it alone.
-    val body = formattedBody(row.id, side, bytes, hex, mimeOf(row, side))
-        ?: return MonoContent.Note("formatting ${bytesStr(bytes.size.toLong())}…")
-    return MonoContent.Code(body.text, contentType = "")
-}
-
-/**
- * The bundled hex formatter, asked for by id.
- *
- * The HEX tab used to build its own dump, byte-for-byte identical to what this
- * formatter produces — so the app shipped an extension point, then went around
- * it, and the tab quietly lost the offset-column highlighting the plugin was
- * already generating. It is a plugin, so it can be absent; the tab says so
- * rather than silently falling back to something that is not a hex dump.
- */
-private const val HEX_FORMATTER = "bittrace.hex"
 
 // --- atoms ---
 

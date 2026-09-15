@@ -309,10 +309,11 @@ already used, with no schema and no introspection.
 
 **What the formatters lost.** `BodyFormatter.format` still runs — pretty-printing
 a minified body is the part that mattered — but `BodyFormatter.highlight` is no
-longer consulted on the Body, Raw and Hex tabs, because the language colours
-them now. The method stays on the plugin interface: removing it would break
-every external formatter for nothing. The Hex tab is deliberately **plain text**,
-since a hex dump is columns of digits that no language describes.
+longer consulted on the Body and Raw tabs, because the language colours them
+now. The method stays on the plugin interface: removing it would break every
+external formatter for nothing. Hex has no tab of its own — it is a formatter
+like any other, picked from the chips above the Body tab, and lands on `PLAIN`
+there, since a hex dump is columns of digits that no language describes.
 
 ## Plugins
 

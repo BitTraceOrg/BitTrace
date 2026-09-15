@@ -94,7 +94,7 @@ fun TabContentSwitcher(
  *
  * For tabs that are views over one thing rather than independent pages: the body stays
  * one composition across the whole strip, so switching tabs changes what it shows
- * without tearing down and rebuilding it. The inspector's Body/Raw/Hex tabs share a
+ * without tearing down and rebuilding it. The inspector's Body/Raw tabs share a
  * code view this way — a page each would give each tab an editor of its own.
  *
  * [modifier] must carry a height, as in the paged form.

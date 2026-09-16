@@ -4,6 +4,7 @@ import org.bittrace.ui.bytesStr
 import org.bittrace.ui.durStr
 import org.bittrace.ui.endStr
 import org.bittrace.ui.hostPath
+import org.bittrace.ui.UNKNOWN_KIND
 import org.bittrace.ui.kindOfRow
 import org.bittrace.ui.startStr
 import org.bittrace.ui.statusOf
@@ -78,9 +79,12 @@ fun statusClassOf(row: TrafficRow): String = statusBucket(row, reset = "ERR")
  *
  * Buckets rather than raw content types: a hundred distinct MIME strings is a
  * list nobody reads, and "is this an image" is the question being asked. Must
- * stay in step with `kindOfRow`, which is what assigns them.
+ * stay in step with `kindOfRow`, which is what assigns them — including
+ * [UNKNOWN_KIND], so "nothing said what this was" is something you can filter
+ * for rather than a gap between the buckets.
  */
-val CONTENT_KINDS = listOf("html", "css", "js", "json", "xml", "img", "font", "media", "text", "bin")
+val CONTENT_KINDS =
+    listOf("html", "css", "js", "json", "xml", "img", "font", "media", "text", "bin", UNKNOWN_KIND)
 
 /**
  * Every column the flow table can show, in catalog order — the order the
@@ -160,12 +164,12 @@ fun defaultColumns(): List<Col> = listOf(
     },
     Col(
         "size", "Size", 64f, end = true,
-        value = { bytesStr(it.response?.response?.bodySize) },
+        value = { bytesStr(it.responseBodySize) },
         // Compared rather than matched: a size is the one column where the
         // question is always a threshold.
-        numeric = { it.response?.response?.bodySize?.takeIf { size -> size >= 0 } },
+        numeric = { it.responseBodySize?.takeIf { size -> size >= 0 } },
     ) {
-        val s = it.response?.response?.bodySize
+        val s = it.responseBodySize
         CellText(bytesStr(s), if (s == null || s < 0) P.err else P.text)
     },
     Col("time", "Time", 60f, end = true, value = { durStr(it) }) {
@@ -185,8 +189,8 @@ fun optionalColumns(): List<Col> = listOf(
         CellText(bytesStr(it.request.request.headersSize), P.dim)
     },
     Col("reqBodySize", "Req body", 64f, end = true,
-        value = { bytesStr(it.request.request.bodySize) }) {
-        CellText(bytesStr(it.request.request.bodySize), P.dim)
+        value = { bytesStr(it.requestBodySize) }) {
+        CellText(bytesStr(it.requestBodySize), P.dim)
     },
     Col("resHeaderSize", "Res hdr", 64f, end = true,
         value = { bytesStr(it.response?.response?.headersSize) }) {
@@ -195,8 +199,8 @@ fun optionalColumns(): List<Col> = listOf(
     // Same figure the default SIZE column shows, named for symmetry with the
     // other three so the four read as one group.
     Col("resBodySize", "Res body", 64f, end = true,
-        value = { bytesStr(it.response?.response?.bodySize) }) {
-        CellText(bytesStr(it.response?.response?.bodySize), P.dim)
+        value = { bytesStr(it.responseBodySize) }) {
+        CellText(bytesStr(it.responseBodySize), P.dim)
     },
 )
 

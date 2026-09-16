@@ -46,6 +46,36 @@ class TrafficRow(
      */
     val failed: Boolean? get() = response?.let { it.error || it.response.status >= 400 }
 
+    /**
+     * Wire length of each body, taking the measured figure once the completing
+     * frame has landed and the header's guess until then — see
+     * [requestBodySizeOf] and [responseBodySizeOf] for why the two differ.
+     * Read these rather than reaching into `request.request.bodySize`, which is
+     * only ever the guess.
+     */
+    val requestBodySize: Long get() = requestBodySizeOf(request, completeRequest)
+
+    /** Null until some part of the response has arrived. */
+    val responseBodySize: Long? get() = responseBodySizeOf(response, completeResponse)
+
+    /**
+     * Bytes of a body that is still arriving, counted as its chunks land; 0
+     * when nothing is in flight on that side.
+     *
+     * Only a streamed body has one. The sidecar streams a body it will not hold
+     * — too large, too slow, or a live stream by content type — and a live
+     * stream can stay open for minutes, so the completing frame that would
+     * otherwise be the first news of a body is a long way off. This is the
+     * progress in the meantime, and it is snapshot state so a view watching one
+     * arrive repaints as it does.
+     */
+    var streamedRequestBytes by mutableStateOf(0L)
+    var streamedResponseBytes by mutableStateOf(0L)
+
+    /** How much of [side]'s body has arrived while it is still streaming. */
+    fun streamedBytes(request: Boolean): Long =
+        if (request) streamedRequestBytes else streamedResponseBytes
+
     /** Ties a request to the CONNECT that opened its tunnel, when there was one. */
     val clientConnectionId: String get() = request.clientConnectionId
 

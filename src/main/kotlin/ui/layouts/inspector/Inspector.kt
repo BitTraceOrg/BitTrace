@@ -68,7 +68,6 @@ import org.bittrace.ui.components.VerticalSplitter
 import org.bittrace.ui.bottomBorder
 import org.bittrace.ui.rightBorder
 import org.bittrace.ui.topBorder
-import org.jetbrains.jewel.ui.component.ToggleableChip
 
 /**
  * Request | Response inspector, with a persisted divider.
@@ -103,14 +102,14 @@ fun Inspector(
         Pane(
             modifier,
             "Request", null, BodySide.REQUEST, row, bodyProvider, formatters,
-            tabs = listOf("Overview", "Headers", "Body", "Form", "Cookies", "Raw"), default = "Overview",
+            tabs = listOf("Overview", "Raw", "Headers", "Cookies", "Body", "Form"), default = "Overview",
         )
     }
     val response: @Composable (Modifier) -> Unit = { modifier ->
         Pane(
             modifier,
             "Response", responseTrailing, BodySide.RESPONSE, row, bodyProvider, formatters,
-            tabs = listOf("Overview", "Body", "Cookies", "Headers", "Raw", "Timing"), default = "Body",
+            tabs = listOf("Overview", "Raw", "Headers", "Cookies", "Body", "Timing"), default = "Body",
         )
     }
 
@@ -165,14 +164,10 @@ private fun Pane(
     // Sticky formatter choice; cleared when a different flow is selected so the
     // default follows each flow's content type.
     var formatterId by remember(row?.id) { mutableStateOf<String?>(null) }
-    // Sticky across flows: having asked for the pretty view once, you want it
-    // for the next flow too.
-    var smartRaw by remember { mutableStateOf(false) }
     // The tabs are views over one flow, not independent pages, so this is the
-    // shared-body form: the code view below survives every switch between Body
-    // and Raw instead of being torn down and rebuilt per tab. The pane title
-    // names the pane, so it is a heading rather than one more label in the strip
-    // beside it.
+    // shared-body form: one code view below, fed by whichever tab is showing,
+    // rather than one per tab. The pane title names the pane, so it is a
+    // heading rather than one more label in the strip beside it.
     TabContentSwitcher(
         tabs = tabs.map { TabLabel(it) },
         selected = tab,
@@ -221,19 +216,23 @@ private fun Pane(
                     // it. Selection within a row still works.
                     //
                     // Both tabs decide *what* to show and share the one view
-                    // that shows it. Composing a code view per branch gave each
-                    // tab an editor of its own, so paging Body → Raw tore down a
-                    // KodeMirror and built another every time; with the call
-                    // site hoisted, the editor survives the switch and only its
-                    // document and its language change.
+                    // that shows it, rather than composing a code view each —
+                    // which is what keeps a change of formatter, or of the body
+                    // underneath, from rebuilding the editor. Body → Raw does
+                    // rebuild it, because a plain view is a different editor
+                    // and not a setting on this one.
                     val content = if (tab == "Body") {
                         bodyContent(row, side, bodyProvider, active, mime)
                     } else {
-                        rawContent(row, side, bodyProvider, smartRaw, active, mime)
+                        rawContent(row, side, bodyProvider)
                     }
                     when (content) {
                         is MonoContent.Note -> Pad(content.text)
-                        is MonoContent.Code -> Mono(content.text, content.contentType)
+                        // RAW is shown as text and nothing else: no language, no
+                        // gutter. BODY keeps both — that tab is the one that
+                        // exists to make a body readable.
+                        is MonoContent.Code ->
+                            Mono(content.text, content.contentType, plain = tab == "Raw")
                     }
                 } else {
                     Box(Modifier.fillMaxSize().verticalScroll(vertical)) {
@@ -256,14 +255,6 @@ private fun Pane(
                 // own.
                 if (!monoTab) {
                     VScrollbar(vertical, Modifier.align(Alignment.CenterEnd).fillMaxHeight())
-                }
-                // Floats over the raw text rather than scrolling with it, and
-                // sits clear of the scrollbar's 8dp lane.
-                if (tab == "Raw") {
-                    SmartViewButton(
-                        on = smartRaw,
-                        modifier = Modifier.align(Alignment.TopEnd).padding(top = 10.dp, end = 16.dp),
-                    ) { smartRaw = !smartRaw }
                 }
             }
         }
@@ -327,14 +318,14 @@ private fun SideHeader(row: TrafficRow, side: BodySide) {
                 Spacer(Modifier.width(8.dp))
                 PzText(mimeOf(row), color = P.dim, style = Typo.label)
                 Spacer(Modifier.weight(1f))
-                PzText("${resp.time.toLong()} ms · ${bytesStr(resp.response.bodySize)}", color = P.dim, style = Typo.label)
+                PzText("${resp.time.toLong()} ms · ${bytesStr(row.responseBodySize)}", color = P.dim, style = Typo.label)
             }
         }
         MetaGrid(
             listOf(
                 Triple("Version", resp?.response?.httpVersion ?: "—", P.text),
                 Triple("Status", resp?.let { if (it.error) "ERR" else it.response.status.toString() } ?: "—", sColor),
-                Triple("CONTENT-LENGTH", bytesStr(resp?.response?.bodySize), P.text),
+                Triple("Body bytes", bytesStr(row.responseBodySize), P.text),
                 Triple("Server", headerValue(row, BodySide.RESPONSE, "server") ?: "—", P.text),
             ),
         )
@@ -373,7 +364,7 @@ private fun RequestOverview(row: TrafficRow) {
     val https = tlsText(row) != "—"
     val reqMime = row.completeRequest?.request?.postData?.mimeType?.takeIf { it.isNotBlank() } ?: "—"
     Column(Modifier.fillMaxWidth()) {
-        SizeRibbon(r.headersSize, r.bodySize)
+        SizeRibbon(r.headersSize, row.requestBodySize)
 
         Section("Endpoint", first = true)
         KvRow("url", r.url, P.info)
@@ -398,7 +389,7 @@ private fun ResponseOverview(row: TrafficRow) {
     val redirect = resp?.response?.redirectURL?.takeIf { it.isNotBlank() }
     Column(Modifier.fillMaxWidth()) {
         PhaseRibbon(row)
-        SizeRibbon(resp?.response?.headersSize ?: 0, resp?.response?.bodySize ?: 0)
+        SizeRibbon(resp?.response?.headersSize ?: 0, row.responseBodySize ?: 0)
 
         Section("Response", first = true)
         KvRow("status", if (resp == null) "pending" else "${resp.response.status} ${resp.response.statusText}".trim(), sColor)
@@ -554,7 +545,7 @@ private fun WebForm(row: TrafficRow, bodyProvider: (String, BodySide) -> ByteArr
     val contentType = mimeOf(row, BodySide.REQUEST).takeIf { it != "—" }
         ?: headerValue(row, BodySide.REQUEST, "content-type")
         ?: ""
-    val hasBody = row.request.request.bodySize != 0L
+    val hasBody = row.requestBodySize != 0L
     val bytes = if (hasBody && isFormBody(contentType)) bodyProvider(row.id, BodySide.REQUEST) else null
     val fields = remember(row.id, contentType, bytes?.size) { parseForm(bytes, contentType) }
 
@@ -612,10 +603,23 @@ private fun bodyContent(
     formatter: BodyFormatter?,
     mime: String,
 ): MonoContent {
-    val declared = if (side == BodySide.REQUEST) row.request.request.bodySize else row.response?.response?.bodySize
-    if (declared == 0L) return MonoContent.Note("body: none")
-    val bytes = bodyProvider(row.id, side) ?: return MonoContent.Note("body not cached for this flow")
-    if (formatter == null) return MonoContent.Code(String(bytes, Charsets.UTF_8), mime)
+    // Read before anything returns, so this composable is subscribed to it
+    // whichever branch it takes: a body arriving now is one whose every other
+    // input is still unchanged, and nothing else here would bring the new bytes
+    // on screen.
+    val streaming = row.streamedBytes(side == BodySide.REQUEST)
+
+    val declared = if (side == BodySide.REQUEST) row.requestBodySize else row.responseBodySize
+    if (declared == 0L && streaming == 0L) return MonoContent.Note("body: none")
+    val bytes = bodyProvider(row.id, side)
+        ?: return MonoContent.Note(
+            if (streaming > 0L) "receiving…" else "body not cached for this flow",
+        )
+    // A body still arriving is shown as it is. Running a formatter over a
+    // fragment would reformat the whole of it on every chunk, and fail on the
+    // half-written last record anyway — the formatter takes over once the
+    // stream closes and the finished body replaces this.
+    if (formatter == null || streaming > 0L) return MonoContent.Code(String(bytes, Charsets.UTF_8), mime)
 
     val body = formattedBody(row.id, side, bytes, formatter, mime)
         ?: return MonoContent.Note("formatting ${bytesStr(bytes.size.toLong())}…")
@@ -671,20 +675,21 @@ private fun FormatterChips(
  * The message exactly as it went over the wire: start line, headers, blank
  * line, body.
  *
- * With [smart] on, the same message is shown pretty-printed and coloured — the
- * head is highlighted here (header names against their values) and the body is
- * run through the active formatter, exactly as the BODY tab does it. Off, it is
- * the untouched bytes, which is the point of a raw view.
+ * Nothing is formatted, coloured or counted. This tab used to carry a "smart
+ * view" toggle that pretty-printed the body and coloured the head, which made
+ * it a second BODY tab with the headers stapled on — and left the one view
+ * that promises to have done nothing to the bytes as the one view with a
+ * setting for how much had been done to them.
  */
 @Composable
 private fun rawContent(
     row: TrafficRow,
     side: BodySide,
     bodyProvider: (String, BodySide) -> ByteArray?,
-    smart: Boolean,
-    formatter: BodyFormatter?,
-    mime: String,
 ): MonoContent {
+    // Subscribes this view to a body still arriving; see [bodyContent].
+    row.streamedBytes(side == BodySide.REQUEST)
+
     val head = StringBuilder()
     if (side == BodySide.REQUEST) {
         val r = row.request.request
@@ -696,47 +701,11 @@ private fun rawContent(
         row.completeResponse?.response?.headers?.forEach { head.append("${it.name}: ${it.value}\n") }
     }
 
-    val bytes = bodyProvider(row.id, side)
-
-    if (!smart) {
-        val sb = StringBuilder(head)
-        sb.append('\n')
-        bytes?.let { sb.append(String(it, Charsets.UTF_8)) }
-        return MonoContent.Code(sb.toString(), mime)
-    }
-
-    val body = if (bytes == null || formatter == null) null else formattedBody(row.id, side, bytes, formatter, mime)
-    if (bytes != null && formatter != null && body == null) {
-        return MonoContent.Note("formatting ${bytesStr(bytes.size.toLong())}…")
-    }
-
-    // Head and body concatenated as plain text. The colouring that used to
-    // happen here — header names against their values, then the formatter's own
-    // spans — is the code view's job now, and doing it twice would mean styling
-    // a string only to throw the styling away.
-    val text = remember(head.toString(), body) {
-        buildString {
-            append(head)
-            append('\n')
-            body?.let { append(it.text) }
-        }
-    }
-    return MonoContent.Code(text, mime)
-}
-
-/**
- * The RAW tab's pretty-view toggle: floats over the text, translucent so the
- * line it covers stays readable.
- */
-@Composable
-private fun SmartViewButton(on: Boolean, modifier: Modifier, onToggle: () -> Unit) {
-    // A real toggle rather than a clickable box: it reports its checked state
-    // and carries hover, press and focus. It loses the translucency the old one
-    // used to keep the covered line readable — an opaque chip over a fixed
-    // corner is the trade, and it reads more clearly for it.
-    ToggleableChip(checked = on, onClick = { onToggle() }, modifier = modifier) {
-        PzText("Smart view", style = Typo.micro, family = P.Ui, softWrap = false)
-    }
+    // The blank line that separates a message's head from its body.
+    head.append('\n')
+    bodyProvider(row.id, side)?.let { head.append(String(it, Charsets.UTF_8)) }
+    // No content type: the view this feeds has no language to pick with one.
+    return MonoContent.Code(head.toString(), "")
 }
 
 // --- atoms ---
@@ -825,8 +794,8 @@ private fun KvRow(
  * formatter for no gain.
  */
 @Composable
-private fun Mono(text: String, contentType: String) {
-    CodeView(text, Modifier.fillMaxSize(), contentType)
+private fun Mono(text: String, contentType: String, plain: Boolean = false) {
+    CodeView(text, Modifier.fillMaxSize(), contentType, plain = plain)
 }
 
 @Composable

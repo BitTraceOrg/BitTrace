@@ -1,5 +1,10 @@
 package org.bittrace.proxy
 
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import java.awt.EventQueue
+import java.util.concurrent.ConcurrentHashMap
 import org.bittrace.data.CompleteRequestMessage
 import org.bittrace.data.CompleteResponseMessage
 import org.bittrace.data.ConnectRequestData
@@ -28,6 +33,13 @@ class ProxyService(
     /** Rebuilds bodies that arrive as chunks; see [StreamedBodies]. */
     private val streamed = StreamedBodies(onLog = { onLog(it) })
 
+    /**
+     * When each in-flight body last reported its progress, by side and flow id.
+     * Written from the sidecar's reader thread and cleared from the UI thread,
+     * so it is concurrent rather than plain.
+     */
+    private val lastProgress = ConcurrentHashMap<Pair<String, String>, Long>()
+
     val isRunning: Boolean get() = process?.isRunning == true
 
     /** PID as reported by the sidecar itself, once its first frame arrives. */
@@ -35,6 +47,26 @@ class ProxyService(
 
     /** Seconds since the sidecar reported its PID. */
     val uptimeSeconds: Long? get() = process?.uptimeSeconds
+
+    /**
+     * The sidecar's last account of itself, as snapshot state so whatever shows
+     * it repaints when a frame lands. Null before the first one, and again
+     * after a stop.
+     */
+    var status: ProxyStatus? by mutableStateOf(null)
+        private set
+
+    /**
+     * The keep-alive has stopped arriving: the sidecar is wedged or gone even
+     * if the process object still looks alive. Not snapshot state — it is a
+     * function of the clock, so a caller that wants it on screen has to look
+     * again rather than wait to be told.
+     */
+    val isStale: Boolean get() = isRunning && process?.isStale == true
+
+    /** Frames the sidecar dropped, already reported; only a rise is news. */
+    private var reportedDrops = 0L
+    private var reportedPortLost = false
 
     /**
      * Starts the sidecar on [port]. Throws if it is already running or missing.
@@ -56,17 +88,46 @@ class ProxyService(
         }
     }
 
-    fun stop(): Int? = process?.stop()
+    fun stop(): Int? {
+        val code = process?.stop()
+        onUi { status = null }
+        reportedDrops = 0
+        reportedPortLost = false
+        return code
+    }
 
     /** Drops captured traffic and the bodies that go with it. */
     fun clear() {
         store.clear()
         bodies.clear()
         streamed.clear()
+        lastProgress.clear()
     }
 
-    /** Raw body for a flow, or null once it has been evicted from the cache. */
-    fun body(id: String, side: BodySide): ByteArray? = bodies.get(id, side)
+    /**
+     * Raw body for a flow: the finished one, or what has arrived so far while
+     * it is still streaming. Null once it has been evicted from the cache, or
+     * before any of it exists.
+     *
+     * The cache is asked first — a body that has ended is decoded and complete,
+     * and the partial bytes behind it are gone by then anyway.
+     */
+    fun body(id: String, side: BodySide): ByteArray? =
+        bodies.get(id, side) ?: streamed.partial(id, side)
+
+    private companion object {
+        /**
+         * The shortest gap between two progress reports for one body. Below
+         * what reads as delay on a figure that is only ever a progress
+         * indicator, and far above the rate the frames themselves arrive at.
+         */
+        const val PROGRESS_INTERVAL_NANOS = 100_000_000L
+    }
+
+    /** Snapshot state is published from the UI thread, as [SessionStore] does. */
+    private inline fun onUi(crossinline block: () -> Unit) {
+        if (EventQueue.isDispatchThread()) block() else EventQueue.invokeLater { block() }
+    }
 
     private val listener = object : ProxyListener {
         override fun onLog(entry: LogEntry) =
@@ -97,8 +158,24 @@ class ProxyService(
         override fun onConnectResponse(data: InitialResponseData) =
             store.onInitialResponse(data)
 
-        override fun onBodyChunk(message: BodyChunkMessage, body: ByteArray) =
+        override fun onBodyChunk(message: BodyChunkMessage, body: ByteArray) {
             streamed.chunk(message, body)
+            val side = BodySide.fromString(message.side) ?: return
+            // Throttled: the sidecar emits a frame as soon as bytes arrive and
+            // caps one at 16 KiB, so a fast transfer produces thousands a
+            // second, and every publish hops to the UI thread. A tenth of a
+            // second is far below what reads as delay on a progress figure and
+            // far above the rate the frames arrive at.
+            val now = System.nanoTime()
+            val last = lastProgress[message.side to message.id]
+            if (last != null && now - last < PROGRESS_INTERVAL_NANOS) return
+            lastProgress[message.side to message.id] = now
+            store.onStreamProgress(
+                message.id,
+                request = side == BodySide.REQUEST,
+                received = streamed.received(message.id, side),
+            )
+        }
 
         override fun onBodyEnd(message: BodyEndMessage) {
             // Closed first, unconditionally: an unrecognised side would
@@ -106,6 +183,47 @@ class ProxyService(
             val body = streamed.end(message)
             val side = BodySide.fromString(message.side)
             if (body != null && side != null) bodies.put(message.id, side, body)
+            lastProgress.remove(message.side to message.id)
+            // An aborted live stream never reaches its Complete* frame, so this
+            // is the only thing that will ever clear the counter.
+            side?.let { store.onStreamProgress(message.id, it == BodySide.REQUEST, 0) }
+        }
+
+        /**
+         * Keeps the published status current, and says out loud the two things
+         * a status frame can report that the app cannot otherwise notice: a
+         * proxy that is up without a port, and frames dropped because this end
+         * was not draining stdout fast enough. Both are silent failures — the
+         * app looks healthy and the capture is simply incomplete.
+         */
+        override fun onStatus(status: ProxyStatus) {
+            onUi { this@ProxyService.status = status }
+
+            if (status.portLost && !reportedPortLost) {
+                reportedPortLost = true
+                onLog(
+                    LogEntry(
+                        "error", "proxy",
+                        "sidecar is running but bound no address — port ${status.port} " +
+                            "is taken, and nothing is being captured",
+                    )
+                )
+            } else if (status.bound) {
+                reportedPortLost = false
+            }
+
+            val dropped = status.counters.droppedFrames
+            if (dropped > reportedDrops) {
+                val delta = dropped - reportedDrops
+                reportedDrops = dropped
+                onLog(
+                    LogEntry(
+                        "warn", "proxy",
+                        "sidecar dropped $delta frame(s) with its queue full " +
+                            "($dropped since start) — those entries are incomplete",
+                    )
+                )
+            }
         }
 
         override fun onStderr(line: String) =

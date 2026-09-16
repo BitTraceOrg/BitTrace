@@ -91,7 +91,7 @@ private fun writeEntry(g: JsonGenerator, row: TrafficRow, body: (String, BodySid
     writePairs(g, "cookies", row.completeRequest?.request?.cookies.orEmpty())
     g.writeArrayFieldStart("queryString"); g.writeEndArray()
     g.writeNumberField("headersSize", req.headersSize)
-    g.writeNumberField("bodySize", req.bodySize)
+    g.writeNumberField("bodySize", row.requestBodySize)
     body(row.id, BodySide.REQUEST)?.takeIf { it.isNotEmpty() }?.let { bytes ->
         g.writeObjectFieldStart("postData")
         g.writeStringField("mimeType", row.completeRequest?.request?.postData?.mimeType.orEmpty())
@@ -124,7 +124,8 @@ private fun writeEntry(g: JsonGenerator, row: TrafficRow, body: (String, BodySid
         writePairs(g, "headers", row.completeResponse?.response?.headers.orEmpty())
         writeCookies(g, row.completeResponse?.response?.cookies.orEmpty())
         g.writeObjectFieldStart("content")
-        g.writeNumberField("size", r.bodySize)
+        // The decoded length, where `bodySize` below is the wire one.
+        g.writeNumberField("size", row.completeResponse?.response?.content?.size ?: (row.responseBodySize ?: -1))
         g.writeStringField("mimeType", row.completeResponse?.response?.content?.mimeType.orEmpty())
         body(row.id, BodySide.RESPONSE)?.takeIf { it.isNotEmpty() }?.let {
             g.writeStringField("text", it.decodeToString())
@@ -132,7 +133,7 @@ private fun writeEntry(g: JsonGenerator, row: TrafficRow, body: (String, BodySid
         g.writeEndObject()
         g.writeStringField("redirectURL", r.redirectURL)
         g.writeNumberField("headersSize", r.headersSize)
-        g.writeNumberField("bodySize", r.bodySize)
+        g.writeNumberField("bodySize", row.responseBodySize ?: -1)
     }
     g.writeEndObject()
 

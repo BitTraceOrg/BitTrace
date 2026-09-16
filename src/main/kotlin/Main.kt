@@ -443,10 +443,9 @@ private fun DecoratedWindowScope.App(
         // not just the payloads. HAR writes -1 for a size it does not know, so
         // every term is floored at zero rather than allowed to subtract.
         val captured = rows.sumOf { r ->
-            val request = r.request.request
-            val response = r.response?.response
-            request.headersSize.coerceAtLeast(0) + request.bodySize.coerceAtLeast(0) +
-                (response?.headersSize?.coerceAtLeast(0) ?: 0L) + (response?.bodySize?.coerceAtLeast(0) ?: 0L)
+            val headers = r.request.request.headersSize.coerceAtLeast(0) +
+                (r.response?.response?.headersSize?.coerceAtLeast(0) ?: 0L)
+            headers + r.requestBodySize.coerceAtLeast(0) + (r.responseBodySize?.coerceAtLeast(0) ?: 0L)
         }
         // Tool windows are siblings of the main one and live inside the same
         // composition, so they inherit the theme without being told about it.

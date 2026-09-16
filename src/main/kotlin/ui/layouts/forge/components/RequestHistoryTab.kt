@@ -91,7 +91,7 @@ fun RequestHistoryTab(state: ApiClientState, collections: CollectionStore, git: 
 
     Row(Modifier.fillMaxSize().background(P.input)) {
         Column(Modifier.width(LIST_WIDTH).fillMaxHeight().rightBorder(P.line)) {
-            Header("COMMITS", commits?.size?.toString())
+            Header("COMMITS")
             val scroll = rememberScrollState()
             Box(Modifier.fillMaxSize()) {
                 Column(Modifier.fillMaxSize().verticalScroll(scroll)) {
@@ -111,7 +111,7 @@ fun RequestHistoryTab(state: ApiClientState, collections: CollectionStore, git: 
 
         Column(Modifier.weight(1f).fillMaxHeight()) {
             val commit = commits.orEmpty().firstOrNull { it.id == selected }
-            Header(commit?.short?.uppercase() ?: "CHANGES", null)
+            Header(commit?.short?.uppercase() ?: "CHANGES")
             Box(Modifier.fillMaxSize()) {
                 when {
                     selected == null -> EmptyState("Pick a commit to see what changed in it.")
@@ -127,14 +127,8 @@ fun RequestHistoryTab(state: ApiClientState, collections: CollectionStore, git: 
 }
 
 @Composable
-private fun Header(title: String, count: String?) = PaneHeader {
+private fun Header(title: String) = PaneHeader {
     PzText(title, color = P.faint, style = Typo.micro, family = P.Ui)
-    count?.let {
-        Spacer(Modifier.weight(1f))
-        // In the UI family like every sibling count. It was mono here, which is
-        // the sort of thing only a shared component makes visible.
-        PzText(it, color = P.faint, style = Typo.micro, family = P.Ui)
-    }
 }
 
 /**

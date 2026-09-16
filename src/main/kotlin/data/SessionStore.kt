@@ -172,10 +172,25 @@ class SessionStore(
     // store the decoded message as-is.
     fun onCompleteRequest(message: CompleteRequestMessage): Unit = onUi {
         byId[message.id]?.completeRequest = message
+        byId[message.id]?.streamedRequestBytes = 0
     }
 
     fun onCompleteResponse(message: CompleteResponseMessage): Unit = onUi {
         byId[message.id]?.completeResponse = message
+        // The body finished with it, whatever the count had reached.
+        byId[message.id]?.streamedResponseBytes = 0
+    }
+
+    /**
+     * How much of a streamed body has arrived, while it is still arriving.
+     *
+     * Called as chunks land rather than once at the end, because a live stream
+     * has no end worth waiting for — the caller throttles, since chunks are
+     * small and frequent by design and this hops to the UI thread.
+     */
+    fun onStreamProgress(id: String, request: Boolean, received: Long): Unit = onUi {
+        val row = byId[id] ?: return@onUi
+        if (request) row.streamedRequestBytes = received else row.streamedResponseBytes = received
     }
 
     // --- import ---

@@ -15,6 +15,8 @@ import org.bittrace.data.CompleteResponseMessage
 import org.bittrace.data.InitialRequestData
 import org.bittrace.data.InitialResponseData
 import org.bittrace.data.NameValuePair
+import org.bittrace.data.requestBodySizeOf
+import org.bittrace.data.responseBodySizeOf
 import org.bittrace.data.SessionStore
 import org.bittrace.proxy.BodyCache
 import org.bittrace.proxy.BodySide
@@ -37,7 +39,11 @@ private class ExportFlow(
     val response: InitialResponseData?,
     val completeRequest: CompleteRequestMessage?,
     val completeResponse: CompleteResponseMessage?,
-)
+) {
+    /** Measured once the body has gone past, guessed from a header until then. */
+    val requestBodySize: Long get() = requestBodySizeOf(request, completeRequest)
+    val responseBodySize: Long? get() = responseBodySizeOf(response, completeResponse)
+}
 
 /**
  * Writes a [SessionStore] to a HAR 1.2 file, one entry at a time.
@@ -186,7 +192,7 @@ class HarExporter(
         }
 
         g.writeNumberField("headersSize", head.headersSize)
-        g.writeNumberField("bodySize", head.bodySize)
+        g.writeNumberField("bodySize", flow.requestBodySize)
         g.writeEndObject()
     }
 
@@ -217,9 +223,12 @@ class HarExporter(
 
         val body = bodies.get(flow.id, BodySide.RESPONSE)
         g.writeObjectFieldStart("content")
-        // size is the wire length from the metadata, which stays accurate even
-        // when the body itself has been evicted from the cache.
-        g.writeNumberField("size", complete?.content?.size ?: head.bodySize)
+        // The decoded length from the metadata, which stays accurate even when
+        // the body itself has been evicted from the cache. HAR's `content.size`
+        // is the decoded figure and `bodySize` the wire one, so a compressed
+        // body makes the two disagree by design.
+        g.writeNumberField("size", complete?.content?.size ?: flow.responseBodySize ?: -1)
+        complete?.content?.compression?.let { g.writeNumberField("compression", it) }
         g.writeStringField("mimeType", complete?.content?.mimeType ?: "")
         if (body != null && body.isNotEmpty()) {
             // Always base64: it sidesteps every encoding question, and viewers
@@ -233,7 +242,7 @@ class HarExporter(
 
         g.writeStringField("redirectURL", head.redirectURL)
         g.writeNumberField("headersSize", head.headersSize)
-        g.writeNumberField("bodySize", head.bodySize)
+        g.writeNumberField("bodySize", flow.responseBodySize ?: -1)
         g.writeEndObject()
     }
 
@@ -264,6 +273,6 @@ class HarExporter(
             ?: value
 
     private companion object {
-        const val APP_VERSION = "0.1.3"
+        const val APP_VERSION = "0.1.4"
     }
 }

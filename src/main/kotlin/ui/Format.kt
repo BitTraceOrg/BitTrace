@@ -37,11 +37,23 @@ fun hostPath(url: String): Pair<String, String> {
     return if (slash < 0) noScheme to "" else noScheme.substring(0, slash) to noScheme.substring(slash)
 }
 
+/**
+ * What a URL's extension says the body is, or [UNKNOWN_KIND] when it says
+ * nothing.
+ *
+ * The fallback used to be `html`, which made every extensionless path — every
+ * REST endpoint, every event stream — report a type it had never claimed. A
+ * guess dressed as an answer is worse than no answer in a column people filter
+ * on.
+ */
 fun kindOf(url: String): String {
     val path = hostPath(url).second.substringBefore('?').lowercase()
     val extension = path.substringAfterLast('.', "")
-    return EXTENSION_KINDS[extension] ?: "html"
+    return EXTENSION_KINDS[extension] ?: UNKNOWN_KIND
 }
+
+/** Shown where a kind is asked for and nothing has said what it is. */
+const val UNKNOWN_KIND = "—"
 
 /**
  * A row's kind, preferring what the response said it was.

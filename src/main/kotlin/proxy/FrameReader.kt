@@ -26,6 +26,12 @@ object Tags {
 
     /** End of a streamed body, with its totals and content encoding. */
     const val BODY_END = 9
+
+    /**
+     * The sidecar's own state, on a schedule rather than in reaction to
+     * traffic — the only frame that arrives while nothing is being captured.
+     */
+    const val STATUS = 10
 }
 
 /**

@@ -39,6 +39,7 @@ class RibbonSlice(val weight: Float, val color: Color, val label: String)
 @Composable
 fun Ribbon(slices: List<RibbonSlice>, total: String, modifier: Modifier = Modifier) {
     val drawn = slices.filter { it.weight > 0f }
+    val shares = sharesOf(drawn)
     Column(
         modifier.fillMaxWidth().bottomBorder(P.line).padding(horizontal = 10.dp, vertical = 8.dp),
         verticalArrangement = Arrangement.spacedBy(6.dp),
@@ -47,8 +48,8 @@ fun Ribbon(slices: List<RibbonSlice>, total: String, modifier: Modifier = Modifi
             if (drawn.isEmpty()) {
                 Box(Modifier.weight(1f).fillMaxHeight().background(P.line2))
             } else {
-                drawn.forEach { slice ->
-                    Box(Modifier.weight(slice.weight).fillMaxHeight().background(slice.color))
+                drawn.forEachIndexed { i, slice ->
+                    Box(Modifier.weight(shares[i]).fillMaxHeight().background(slice.color))
                 }
             }
         }
@@ -63,6 +64,29 @@ fun Ribbon(slices: List<RibbonSlice>, total: String, modifier: Modifier = Modifi
             PzText(total, color = P.accent, style = Typo.label)
         }
     }
+}
+
+/**
+ * The slices as fractions of their sum.
+ *
+ * A caller measures in whatever unit its quantity comes in, and a ribbon over
+ * bytes hands over numbers in the millions. Compose treats a weight as a
+ * quantity of pixels per unit while measuring intrinsics — it multiplies the
+ * weight by a pixel figure and asks a child to measure at the result — so a
+ * weight of twenty million becomes a width of twenty million, which is wider
+ * than a `Constraints` can represent, and the layout throws rather than
+ * clipping. Dividing through here keeps the sum at 1 whatever the unit, and the
+ * proportions are all the bar was ever reading from the numbers.
+ *
+ * Summed as a `Double` so that a long ribbon of large slices cannot lose the
+ * small ones to float rounding before they are divided.
+ */
+private fun sharesOf(slices: List<RibbonSlice>): List<Float> {
+    val total = slices.sumOf { it.weight.toDouble() }
+    if (total <= 0.0) return slices.map { 1f / slices.size.coerceAtLeast(1) }
+    // A slice too thin to round up to a pixel draws nothing, which is what it
+    // should do — but a zero weight is not a weight, so it keeps a token share.
+    return slices.map { (it.weight / total).toFloat().coerceAtLeast(Float.MIN_VALUE) }
 }
 
 /**

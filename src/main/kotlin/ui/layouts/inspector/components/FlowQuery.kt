@@ -177,7 +177,7 @@ fun facetValueOf(group: FacetGroup, row: TrafficRow): String = when (group) {
     FacetGroup.TYPE -> kindOfRow(row)
     FacetGroup.HOST -> hostPath(row.request.request.url).first
     FacetGroup.DURATION -> durationBucket(row.response?.time)
-    FacetGroup.SIZE -> sizeBucket(row.response?.response?.bodySize)
+    FacetGroup.SIZE -> sizeBucket(row.responseBodySize)
 }
 
 /**

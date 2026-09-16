@@ -45,6 +45,8 @@ class ProxyProcess(
     private val processRef = AtomicReference<Process?>()
     private val reportedPid = AtomicReference<String?>()
     private val startedAt = AtomicReference<Instant?>()
+    private val lastStatus = AtomicReference<ProxyStatus?>()
+    private val lastStatusAt = AtomicReference<Instant?>()
 
     /** The unpacked executable this instance will run, extracting it if needed. */
     val executable: File get() = SidecarBinary.resolve().toFile()
@@ -54,9 +56,31 @@ class ProxyProcess(
     /** The PID as the sidecar reported it on stdout, once the PID frame arrives. */
     val pid: String? get() = reportedPid.get()
 
-    /** Seconds since the sidecar reported its PID, or null before that. */
+    /**
+     * How long the sidecar says it has been up, falling back to how long ago it
+     * reported its PID. Its own figure is the better one — it is measured from
+     * the process start rather than from whenever this end started listening.
+     */
     val uptimeSeconds: Long?
-        get() = startedAt.get()?.let { Duration.between(it, Instant.now()).seconds }
+        get() = lastStatus.get()?.uptimeMs?.takeIf { it >= 0 }?.let { it / 1000 }
+            ?: startedAt.get()?.let { Duration.between(it, Instant.now()).seconds }
+
+    /** The last status frame, or null before the first one lands. */
+    val status: ProxyStatus? get() = lastStatus.get()
+
+    /**
+     * The sidecar has gone quiet for longer than its own keep-alive interval
+     * allows, so it is wedged or gone even though the process may still be
+     * there. False before the first frame, which is startup rather than
+     * silence.
+     */
+    val isStale: Boolean
+        get() {
+            val at = lastStatusAt.get() ?: return false
+            val interval = lastStatus.get()?.intervalMs?.takeIf { it > 0 } ?: 60_000
+            return Duration.between(at, Instant.now()).toMillis() >
+                interval * ProxyStatus.MISSED_INTERVALS
+        }
 
     /**
      * Spawns the sidecar and starts draining its streams.
@@ -110,6 +134,8 @@ class ProxyProcess(
         }
         processRef.compareAndSet(process, null)
         killReportedProcess()
+        lastStatus.set(null)
+        lastStatusAt.set(null)
         return process.exitValue()
     }
 
@@ -154,7 +180,12 @@ class ProxyProcess(
     // -----------------------------------------------------------------------
 
     private fun readFrames(stdout: InputStream) {
-        stdout.buffered().use { stream ->
+        // Generously buffered. The sidecar caps a body chunk at 16 KiB and
+        // emits it the moment the bytes arrive rather than filling it, so a
+        // fast transfer is thousands of small frames a second — and a reader
+        // that falls behind does not merely lag, it makes the sidecar drop
+        // chunks it cannot hand over.
+        stdout.buffered(READ_BUFFER).use { stream ->
             FrameReader.read(stream) { frame -> dispatch(frame) }
         }
     }
@@ -205,6 +236,20 @@ class ProxyProcess(
             Tags.BODY_END ->
                 decode<BodyEndMessage>("proxy-body-end", frame.json)
                     ?.let(listener::onBodyEnd)
+
+            Tags.STATUS ->
+                decode<ProxyStatus>("proxy-status", frame.json)?.let { status ->
+                    lastStatus.set(status)
+                    lastStatusAt.set(Instant.now())
+                    // The worker's pid, same as the PID frame's — recorded here
+                    // too so a stream joined after startup still knows which
+                    // process holds the port.
+                    if (reportedPid.get() == null && status.pid > 0) {
+                        reportedPid.set(status.pid.toString())
+                        startedAt.compareAndSet(null, Instant.now())
+                    }
+                    listener.onStatus(status)
+                }
 
             else -> logError("unknown frame tag: ${frame.tag}")
         }
@@ -265,6 +310,9 @@ class ProxyProcess(
 
         /** How long a killed orphan is given to actually go away. */
         private const val REAP_MILLIS = 2_000L
+
+        /** Read buffer for the frame stream; see [readFrames]. */
+        private const val READ_BUFFER = 256 * 1024
 
         /**
          * Kills sidecars that outlived whatever launched them.

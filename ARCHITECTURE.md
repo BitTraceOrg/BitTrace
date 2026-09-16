@@ -50,9 +50,16 @@ id and side, and reach the UI through a `(id, side) -> ByteArray?` lambda. That
 keeps `TrafficRow` small, lets the cache evict independently of the row list,
 and means anything that can produce bytes can feed the Inspector.
 
-A body past the sidecar's streaming threshold does not ride on its `Complete*`
-frame at all: it is forwarded chunk by chunk, and `StreamedBodies` reassembles
-it before it reaches the cache. Two things separate that path from the inline
+A body the sidecar will not hold does not ride on its `Complete*` frame at all:
+it is forwarded chunk by chunk, and `StreamedBodies` reassembles it before it
+reaches the cache. Three things trigger that — a body over 4 MiB, one still
+arriving a second after it started, and one whose `Content-Type` makes it a
+live stream (SSE, gRPC, newline-delimited JSON), which is chunked from its
+first byte. The last two are why `StreamedBodies.partial` exists: a feed can
+hold a connection open for minutes, so the inspector reads what has arrived so
+far rather than waiting for a `Complete*` frame that is nowhere near. Progress
+lands on the row as `streamedRequestBytes` / `streamedResponseBytes`, throttled
+to ten updates a second, which is what repaints the body view as it fills. Two things separate that path from the inline
 one. The bytes arrive **still `Content-Encoding`-encoded**, because mitmproxy's
 stream callback sees the wire rather than the decoded message, so they are
 inflated here. And capture is **best-effort**: the sidecar drops chunks rather
@@ -60,6 +67,28 @@ than stalling the proxy's event loop behind a slow reader, and assembly stops at
 a fixed ceiling rather than letting one download size the heap. Either way the
 prefix is kept and the loss is logged, since what reaches the Inspector then
 looks like a whole body.
+
+Every frame above is a reaction to traffic, so silence on the stream means
+nothing on its own — an idle proxy and a dead one look identical. The `Status`
+frame is the exception: the sidecar sends one at startup, one once it has bound
+its port, and one per interval after that, straight to stdout rather than
+through the queue that backs up under load. `ProxyService.status` publishes the
+latest as snapshot state and `isStale` reports the silence, which is what the
+home strip reads to tell a wedged proxy from a working one. Two conditions it
+reports are otherwise invisible and so get logged: a sidecar that is running
+but bound no address (the app looks healthy and captures nothing), and frames
+it dropped because this end was not draining stdout fast enough.
+
+**A body size arrives twice and the two are not the same number.** The initial
+frame can only read `Content-Length`, which no chunked or HTTP/2 response sends
+— it reports `-1` there, and `0` for a chunked upload — while the completing
+frame carries the length actually measured once the body had gone past. Read
+`TrafficRow.requestBodySize` / `responseBodySize`, which prefer the measured
+figure and fall back to the header hint while the body is still in flight;
+an errored flow, which never produces a completing frame, reports what it did
+receive on the error frame's `content` instead. Both are *wire* lengths:
+`content.size` is the decoded one, and for a compressed body they disagree by
+design (HAR says the same).
 
 ### Threading
 

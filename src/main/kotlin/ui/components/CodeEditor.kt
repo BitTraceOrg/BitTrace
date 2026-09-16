@@ -17,6 +17,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.monkopedia.kodemirror.basicsetup.basicSetup
+import com.monkopedia.kodemirror.basicsetup.minimalSetup
 import com.monkopedia.kodemirror.state.Compartment
 import com.monkopedia.kodemirror.state.TransactionSpec
 import com.monkopedia.kodemirror.state.extensionListOf
@@ -122,9 +123,21 @@ fun CodeEditor(
  * path: it inherits the gutter, the search panel, the selection and the
  * viewport, and a viewer that behaved differently from the editor beside it is
  * exactly the kind of difference people notice.
+ *
+ * [plain] drops all of that down to text: no line numbers, no fold gutter, no
+ * active-line highlight, no language, no colour. It is for a view whose whole
+ * claim is that nothing has been done to what it shows — a gutter counting the
+ * lines of a raw message is a reading of it, and a highlighter is an
+ * interpretation. Still this editor rather than a `Text`, because the viewport
+ * and the selection are what make a multi-megabyte body openable at all.
  */
 @Composable
-fun CodeView(value: String, modifier: Modifier = Modifier, contentType: String = "") {
+fun CodeView(
+    value: String,
+    modifier: Modifier = Modifier,
+    contentType: String = "",
+    plain: Boolean = false,
+) {
     // Only the palette rebuilds the session here. The language does not: it
     // lives in a compartment, which is CodeMirror's own answer to a setting
     // that changes over the life of an editor, and it is reconfigured in place
@@ -132,8 +145,15 @@ fun CodeView(value: String, modifier: Modifier = Modifier, contentType: String =
     // switch — Hex declares none at all — and rebuilding for that threw away
     // the whole editor (state, viewport, search panel) and built another to
     // show text that had not changed.
-    key(P.palette) {
-        val language = languageFor(contentType)
+    // [plain] joins the palette in the key: it picks a different setup bundle,
+    // which is fixed for the life of a session. Paging between a rich tab and a
+    // plain one therefore does rebuild the editor — they are two different
+    // views, and only a switch between them pays for it.
+    key(P.palette, plain) {
+        // A plain view has no language, so nothing claims a token and nothing is
+        // coloured. `languageFor` still has to supply one: the setup bundles
+        // throw without a language configured.
+        val language = languageFor(if (plain) "" else contentType)
         val appearance = editorAppearance()
         val languageSlot = remember { Compartment() }
 
@@ -141,7 +161,7 @@ fun CodeView(value: String, modifier: Modifier = Modifier, contentType: String =
             doc = value,
             extensions = extensionListOf(
                 *listOfNotNull(
-                    basicSetup,
+                    if (plain) minimalSetup else basicSetup,
                     appearance,
                     languageSlot.of(language.extension),
                     readOnly.of(true),
@@ -156,6 +176,8 @@ fun CodeView(value: String, modifier: Modifier = Modifier, contentType: String =
         // one JSON media type to another, which is the same language.
         val configured = remember { mutableStateOf(language) }
         LaunchedEffect(language) {
+            // A plain view stays on the plain language whatever the content
+            // type says, so this never fires for one.
             // Identity, not equality: `languageFor` hands back one shared
             // instance per language, so two calls agree exactly when the
             // language is unchanged.

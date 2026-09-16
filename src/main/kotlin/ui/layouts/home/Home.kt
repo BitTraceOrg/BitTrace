@@ -20,10 +20,12 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.delay
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -72,11 +74,24 @@ fun HomeView(
     val rows = store.rows
     val failed = rows.count { it.failed == true }
     val succeeded = rows.count { it.failed == false }
-    val totalSize = rows.sumOf { (it.response?.response?.bodySize ?: 0L).coerceAtLeast(0L) }
+    val totalSize = rows.sumOf { (it.responseBodySize ?: 0L).coerceAtLeast(0L) }
     // Drives both the toggle and how many days the heatmap draws.
     var rangeDays by remember { mutableStateOf(30) }
     // Picked once per screen entry so the greeting stays put while you use it.
     val greeting = remember { Greetings.random() }
+
+    // The sidecar's keep-alive is the only thing that moves while nothing is
+    // being captured, and its absence is the interesting part — which nothing
+    // arrives to announce. So the strip keeps its own beat rather than waiting
+    // to be told that it was not told anything.
+    val status = service.status
+    var quiet by remember { mutableStateOf(false) }
+    LaunchedEffect(service) {
+        while (true) {
+            quiet = service.isStale
+            delay(STALE_POLL_MS)
+        }
+    }
 
     Column(
         // Keep the dashboard anchored to the left rather than stretching wide.
@@ -101,15 +116,31 @@ fun HomeView(
                 Modifier.fillMaxWidth().bottomBorder(P.line).padding(horizontal = 12.dp, vertical = 10.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Dot(if (service.isRunning) P.ok else P.err, 8)
+                // Three states, not two: a sidecar that has stopped answering
+                // is still a live process, and calling that "running" is the
+                // reading that sends someone looking at their own machine for
+                // an hour.
+                val (dot, label) = when {
+                    !service.isRunning -> P.err to "Proxy stopped"
+                    quiet -> P.warn to "Proxy not responding"
+                    status?.portLost == true -> P.err to "Proxy running, no port bound"
+                    else -> P.ok to "Proxy running"
+                }
+                Dot(dot, 8)
                 Spacer(Modifier.width(8.dp))
-                PzText(if (service.isRunning) "Proxy running" else "Proxy stopped", color = P.text, style = Typo.body, family = P.Ui)
+                PzText(label, color = P.text, style = Typo.body, family = P.Ui)
                 Spacer(Modifier.weight(1f))
                 Box(
                     Modifier.background(P.bg, ChipShape).border1(P.line, shape = ChipShape)
                         .padding(horizontal = 8.dp, vertical = 3.dp),
                 ) {
-                    PzText("localhost:$port", color = P.dim, style = Typo.label)
+                    // What it actually bound, when it has said — the asked-for
+                    // port is a guess until then.
+                    PzText(
+                        status?.listenAddrs?.firstOrNull() ?: "localhost:$port",
+                        color = P.dim,
+                        style = Typo.label,
+                    )
                 }
             }
             Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp), horizontalArrangement = Arrangement.spacedBy(28.dp)) {
@@ -228,6 +259,9 @@ private fun Kpi(modifier: Modifier, label: String, value: String, valueColor: Co
 
 /** Standard bordered panel background. */
 private fun panel(): Modifier = Modifier.fillMaxWidth().background(P.panel).border1(P.line)
+
+/** How often the strip re-reads the sidecar's silence. */
+private const val STALE_POLL_MS = 5_000L
 
 private fun uptime(seconds: Long?): String {
     if (seconds == null) return "—"

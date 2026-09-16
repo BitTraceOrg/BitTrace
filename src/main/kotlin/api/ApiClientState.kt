@@ -12,6 +12,7 @@ import kotlin.coroutines.CoroutineContext
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.async
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
@@ -485,6 +486,26 @@ class ApiClientState(
 
         tab.inFlight = scope.launch {
             val vars = TrackedVariables(variablesFor(homeOf(tab)))
+
+            // Correlation runs *beside* the send rather than after it.
+            //
+            // This client does not get a response until the whole body has
+            // arrived, which for an event stream or a long poll is minutes
+            // away, or never. The captured flow exists from the first byte and
+            // its body fills as the sidecar streams the chunks over — so
+            // binding the pane to it here is what makes an SSE feed visible
+            // while it runs, instead of a pane saying "select a flow" until the
+            // server finally hangs up.
+            //
+            // The sidecar emits its frames before the response reaches us, but
+            // they land on the event thread as separate runnables, so the row
+            // still has to be waited for rather than assumed.
+            val correlating = if (viaProxy) {
+                async { awaitCaptured(marker, watermark, generation)?.also { tab.resultId = it.id } }
+            } else {
+                null
+            }
+
             val outcome = withContext(Dispatchers.IO) {
                 sender.execute(
                 outgoing, settings, marker.takeIf { viaProxy }, viaProxy, port, tokens,
@@ -493,10 +514,7 @@ class ApiClientState(
             }
             reportMissing(vars)
 
-            // The sidecar emits its frames before the response reaches us, but
-            // they land on the event thread as separate runnables — so wait for
-            // the row rather than assuming it is already there.
-            val captured = if (viaProxy) awaitCaptured(marker, watermark, generation) else null
+            val captured = correlating?.await()
 
             tab.resultId = captured?.id ?: synthesize(outcome)
             tab.status = when {
@@ -612,6 +630,7 @@ class ApiClientState(
             request = CompleteRequestMessage.RequestBody(
                 headers = outcome.requestHeaders.map { TrafficStrings.pair(it.first, it.second) },
                 cookies = emptyList(),
+                bodySize = outcome.requestBody.size.toLong(),
                 postData = outcome.requestBody
                     .takeIf { it.isNotEmpty() }
                     ?.let { CompleteRequestMessage.PostData(TrafficStrings.intern(contentTypeOf(outcome))) },
@@ -623,8 +642,12 @@ class ApiClientState(
             response = CompleteResponseMessage.ResponseBody(
                 headers = outcome.responseHeaders.map { TrafficStrings.pair(it.first, it.second) },
                 cookies = emptyList(),
+                // The client hands back a decoded body, so there is no separate
+                // wire length to report here.
+                bodySize = outcome.responseBody.size.toLong(),
                 content = HarContent(
                     size = outcome.responseBody.size.toLong(),
+                    wireSize = outcome.responseBody.size.toLong(),
                     mimeType = TrafficStrings.intern(
                         outcome.responseHeaders.firstOrNull { it.first.equals("content-type", true) }?.second ?: "",
                     ),

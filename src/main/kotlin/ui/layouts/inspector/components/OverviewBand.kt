@@ -122,9 +122,18 @@ fun OverviewBand(
         label = "search",
     )
 
-    // How long the capture runs, which the strip's axis spans.
+    // How long the capture runs, which the strip's axis spans — floored at one
+    // minute, as `Waterfall` floors its own total.
+    //
+    // Not a cosmetic floor. Everything drawn on the strip is a ratio against
+    // this, and the default window is a trailing minute whatever the capture
+    // has managed so far, so a capture two milliseconds old asks for a window
+    // thirty thousand times its own width. Without the floor that ratio reaches
+    // the millions of pixels, which is wider than a `Constraints` can hold, and
+    // the strip takes the whole view down rather than drawing something wrong.
     val span = remember(rows.size, origin) {
-        rows.mapNotNull { offsetOf(it, origin)?.plus(it.response?.time ?: 0.0) }.maxOrNull() ?: WINDOW_MS
+        val seen = rows.mapNotNull { offsetOf(it, origin)?.plus(it.response?.time ?: 0.0) }.maxOrNull()
+        (seen ?: WINDOW_MS).coerceAtLeast(WINDOW_MS)
     }
     // Whether the window came from a deliberate brush. Until it does it tracks
     // the live edge, so the strip's selection is always exactly the minute the
@@ -560,8 +569,7 @@ private fun TimeStrip(
             }
 
             painted?.let { window ->
-                val a = (window.start / span * size.width).toFloat()
-                val b = (window.endInclusive / span * size.width).toFloat()
+                val (a, b) = window.onStrip(span, size.width)
                 drawRect(P.accent.copy(alpha = TOKEN_FILL), Offset(a, 0f), Size(b - a, size.height))
                 drawRect(P.accent, Offset(a, 0f), Size(1f, size.height))
                 drawRect(P.accent, Offset(b - 1f, 0f), Size(1f, size.height))
@@ -572,8 +580,7 @@ private fun TimeStrip(
         // is draggable before you try. It takes no clicks of its own — the press
         // still belongs to the strip, which is what knows where it landed.
         painted?.let { window ->
-            val left = (window.start / span * width).toFloat()
-            val right = (window.endInclusive / span * width).toFloat()
+            val (left, right) = window.onStrip(span, width)
             Box(
                 Modifier
                     .offset { IntOffset(left.toInt(), 0) }
@@ -583,6 +590,28 @@ private fun TimeStrip(
             )
         }
     }
+}
+
+/**
+ * Where a window's edges fall on a strip [width] pixels wide, clamped to it.
+ *
+ * A window is a range of milliseconds and nothing holds it inside the capture:
+ * the default one is a trailing minute from the first flow, and a brushed one
+ * outlives the capture it was drawn on — clear the traffic and the axis it was
+ * measured against collapses back to a minute underneath it. Both leave a
+ * window running off the end of the strip, and the overlay that has to be
+ * *sized* to it asks Compose for a width in the millions, which it refuses to
+ * represent.
+ *
+ * Clamping draws the truth as well: a window wider than the axis selects
+ * everything on it, and an edge parked at the strip's own edge says exactly
+ * that, where an edge drawn off-screen says nothing at all.
+ */
+private fun ClosedFloatingPointRange<Double>.onStrip(span: Double, width: Float): Pair<Float, Float> {
+    if (span <= 0.0 || !width.isFinite() || width <= 0f) return 0f to 0f
+    val left = (start / span * width).toFloat().coerceIn(0f, width)
+    val right = (endInclusive / span * width).toFloat().coerceIn(left, width)
+    return left to right
 }
 
 /**

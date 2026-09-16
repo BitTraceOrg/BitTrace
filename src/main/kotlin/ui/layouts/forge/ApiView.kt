@@ -964,13 +964,7 @@ private fun HistoryRow(entry: HistoryEntry, onOpen: () -> Unit, onRemove: () -> 
                 Spacer(Modifier.width(6.dp))
                 CellText(label, color = P.text, style = Typo.caption)
             }
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                PzText(dayClockOf(entry.lastUsedMillis), color = P.faint, style = Typo.micro, softWrap = false)
-                if (entry.count > 1) {
-                    Spacer(Modifier.width(6.dp))
-                    PzText("×${entry.count}", color = P.dim, style = Typo.micro, family = P.Ui, softWrap = false)
-                }
-            }
+            PzText(dayClockOf(entry.lastUsedMillis), color = P.faint, style = Typo.micro, softWrap = false)
         }
         // Always laid out, only sometimes visible — adding the button on hover
         // would make the row change size as the pointer crossed it. `enabled` is

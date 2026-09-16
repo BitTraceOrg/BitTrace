@@ -185,6 +185,9 @@ class HarImporter(
                 // HAR request cookies may carry path/domain/etc; the wire model
                 // keeps only name/value on this side (responses keep the rest).
                 cookies = req.cookies.map { TrafficStrings.pair(it.name, it.value) },
+                // A HAR reports one body size per direction, already measured;
+                // the initial/complete split is a live-capture concern only.
+                bodySize = req.bodySize,
                 postData = req.postData?.let {
                     CompleteRequestMessage.PostData(TrafficStrings.intern(it.mimeType))
                 },
@@ -206,9 +209,12 @@ class HarImporter(
                         secure = it.secure,
                     )
                 },
+                bodySize = res.bodySize,
                 content = HarContent(
                     size = res.content.size,
                     mimeType = TrafficStrings.intern(res.content.mimeType),
+                    wireSize = res.bodySize,
+                    compression = res.content.compression,
                 ),
             ),
             timings = CompleteResponseMessage.Timings(entry.timings.receive),

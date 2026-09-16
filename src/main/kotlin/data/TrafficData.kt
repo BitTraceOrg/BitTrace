@@ -40,8 +40,20 @@ data class HarTimings(
  */
 @Serializable
 data class HarContent(
+    /**
+     * The body length with `Content-Encoding` undone, whether or not the body
+     * was streamed — for a streamed one the decoded length is counted as the
+     * chunks go past. `-1` when the encoding was malformed and the decoded
+     * length is genuinely unknowable.
+     */
     val size: Long,
     @Serializable(with = InternedStringSerializer::class) val mimeType: String,
+    /** Bytes actually received, before decoding. `-1` on a flow that predates the field. */
+    val wireSize: Long = -1,
+    /** `size - wireSize`, present only when decoding grew the body (per HAR). */
+    val compression: Long? = null,
+    /** The flow errored mid-body: these sizes are what did arrive, not a total. */
+    val partial: Boolean = false,
 )
 
 // ---------------------------------------------------------------------------
@@ -71,6 +83,11 @@ data class InitialRequestData(
         val url: String,
         val httpVersion: String,
         val headersSize: Long,
+        /**
+         * Guessed from `Content-Length`, and so `0` on a chunked upload where
+         * the header is absent. [CompleteRequestMessage.RequestBody.bodySize]
+         * corrects it once the body has gone past; see [requestBodySizeOf].
+         */
         val bodySize: Long,
         val queryString: List<NameValuePair> = emptyList(),
     )
@@ -96,8 +113,20 @@ data class InitialResponseData(
         val statusText: String,
         val httpVersion: String,
         val headersSize: Long,
+        /**
+         * The `Content-Length` **header**, so `-1` on every chunked and HTTP/2
+         * response, where no such header exists. A hint to show while the body
+         * is still in flight — [CompleteResponseMessage.ResponseBody.bodySize]
+         * is the measured figure. See [responseBodySizeOf].
+         */
         val bodySize: Long,
         val redirectURL: String,
+        /**
+         * Only on an errored flow that had already received part of its body.
+         * No `CompleteResponse` follows one, so this is the only report of what
+         * arrived, and it is flagged [HarContent.partial].
+         */
+        val content: HarContent? = null,
     )
 }
 
@@ -121,6 +150,13 @@ data class CompleteRequestMessage(
     data class RequestBody(
         val headers: List<NameValuePair> = emptyList(),
         val cookies: List<NameValuePair> = emptyList(),
+        /**
+         * The body length as measured once all of it had been sent, which is
+         * the figure to prefer over the `Content-Length` guess on
+         * [InitialRequestData.RequestHead.bodySize]. `-1` on a flow that
+         * predates the field, and on a CONNECT, which has no body.
+         */
+        val bodySize: Long = -1,
         /** Body fetched on demand via `get_body` (side: "request"). */
         val postData: PostData? = null,
     )
@@ -140,8 +176,10 @@ data class CompleteResponseMessage(
     val time: Double,
     /**
      * The body was streamed as `BodyChunk` frames rather than carried here, so
-     * the frame's body segment is empty and `content.size` is the *compressed*
-     * wire length. See [org.bittrace.proxy.StreamedBodies].
+     * this frame's body segment is empty — the bytes were assembled from the
+     * chunks and cached before this arrived. The sizes mean the same either
+     * way: `content.size` is the decoded length, `content.wireSize` the length
+     * on the wire. See [org.bittrace.proxy.StreamedBodies].
      */
     @SerialName("_bodyStreamed") val bodyStreamed: Boolean = false,
 ) {
@@ -149,12 +187,54 @@ data class CompleteResponseMessage(
     data class ResponseBody(
         val headers: List<NameValuePair> = emptyList(),
         val cookies: List<HarCookie> = emptyList(),
+        /**
+         * Bytes received for the body before decoding — the same figure as
+         * `content.wireSize`, measured rather than read off a header the way
+         * [InitialResponseData.ResponseHead.bodySize] is. `-1` on a flow that
+         * predates the field. See [responseBodySizeOf].
+         */
+        val bodySize: Long = -1,
         val content: HarContent,
     )
 
     @Serializable
     data class Timings(val receive: Double)
 }
+
+// ---------------------------------------------------------------------------
+// Body sizes  (the same figure arrives twice, and the two are not equal)
+// ---------------------------------------------------------------------------
+
+/**
+ * Bytes sent for the request body, on the wire.
+ *
+ * The initial frame can only guess from `Content-Length`, which a chunked
+ * upload does not send — it reports `0` there, for a request that may carry
+ * megabytes. The completing frame measures the body it actually saw, so it
+ * wins whenever it has arrived.
+ *
+ * Neither is [HarContent.size], which is the *decoded* length.
+ */
+fun requestBodySizeOf(head: InitialRequestData, complete: CompleteRequestMessage?): Long =
+    complete?.request?.bodySize?.takeIf { it >= 0 } ?: head.request.bodySize
+
+/**
+ * Bytes received for the response body, on the wire, or null before any part of
+ * the response has arrived.
+ *
+ * Same split as [requestBodySizeOf], and it matters more often: the initial
+ * frame reads `Content-Length`, which is absent on every chunked and HTTP/2
+ * response, so the size showed as unknown for most of the traffic on a modern
+ * site until the measured figure landed.
+ *
+ * An errored flow never produces a completing frame at all; what it received
+ * before failing is reported on the error frame's [HarContent] instead, which
+ * is the last branch here.
+ */
+fun responseBodySizeOf(head: InitialResponseData?, complete: CompleteResponseMessage?): Long? =
+    complete?.response?.bodySize?.takeIf { it >= 0 }
+        ?: head?.response?.content?.wireSize?.takeIf { it >= 0 }
+        ?: head?.response?.bodySize
 
 // ---------------------------------------------------------------------------
 // CONNECT  (tunnel setup — its own pair of frames)
@@ -220,6 +300,11 @@ data class ConnectRequestData(
      */
     fun toCompleteRequest(): CompleteRequestMessage = CompleteRequestMessage(
         id = id,
-        request = CompleteRequestMessage.RequestBody(headers = request.headers),
+        request = CompleteRequestMessage.RequestBody(
+            headers = request.headers,
+            // A CONNECT is a header and nothing else; the zero is known, not a
+            // missing measurement.
+            bodySize = 0,
+        ),
     )
 }

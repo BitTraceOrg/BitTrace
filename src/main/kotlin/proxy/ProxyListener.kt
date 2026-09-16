@@ -57,6 +57,12 @@ interface ProxyListener {
     /** The sidecar's PID as it reported it on stdout. */
     fun onPid(pid: String) {}
 
+    /**
+     * The sidecar's periodic account of itself — its keep-alive, and the only
+     * frame that arrives while no traffic is flowing. See [ProxyStatus].
+     */
+    fun onStatus(status: ProxyStatus) {}
+
     /** A line the sidecar wrote to stderr. */
     fun onStderr(line: String) {}
 

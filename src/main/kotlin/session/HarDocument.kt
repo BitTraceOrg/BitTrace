@@ -69,6 +69,8 @@ class HarPostData(
 class HarContentJson(
     val size: Long = -1,
     val mimeType: String = "",
+    /** Per HAR, present only when decoding grew the body. */
+    val compression: Long? = null,
     val text: String? = null,
     /** "base64", or absent/anything else for literal text. */
     val encoding: String? = null,

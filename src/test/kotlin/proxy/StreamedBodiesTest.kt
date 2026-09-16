@@ -6,6 +6,7 @@ import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
 /**
@@ -69,6 +70,21 @@ class StreamedBodiesTest {
     }
 
     @Test
+    fun `reassembles a body that arrives a byte at a time`() {
+        // The sidecar no longer holds bytes back to fill a chunk: whatever
+        // mitmproxy hands over is emitted at once, capped at 16 KiB. A body
+        // that trickles in therefore arrives as a great many tiny frames, and
+        // a gzip member split across them is only a member once it is whole.
+        val plain = "the quick brown fox".repeat(50).toByteArray()
+        val bodies = StreamedBodies()
+        gzip(plain).forEachIndexed { i, byte ->
+            bodies.chunk(BodyChunkMessage("flow", "response", i.toLong()), byteArrayOf(byte))
+        }
+
+        assertContentEquals(plain, bodies.end(end(encoding = "gzip", size = plain.size.toLong())))
+    }
+
+    @Test
     fun `keeps what inflated from a body cut short`() {
         // Varied enough that half the compressed stream is still real deflate
         // data — one line repeated gzips down to a few dozen bytes, most of
@@ -104,6 +120,43 @@ class StreamedBodiesTest {
         assertContentEquals("12345678".toByteArray(), bodies.end(end(size = 12)))
         assertEquals(1, logs.size)
         assertEquals("warn", logs.single().level)
+    }
+
+    @Test
+    fun `hands over a live stream while it is still arriving`() {
+        // An event stream is chunked from its first byte and may not close for
+        // minutes, so what has arrived has to be readable before it does.
+        val bodies = StreamedBodies()
+        assertNull(bodies.partial("flow", BodySide.RESPONSE))
+
+        bodies.chunk(BodyChunkMessage("flow", "response", 0), "data: one\n\n".toByteArray())
+        assertContentEquals("data: one\n\n".toByteArray(), bodies.partial("flow", BodySide.RESPONSE))
+        assertEquals(11L, bodies.received("flow", BodySide.RESPONSE))
+
+        bodies.chunk(BodyChunkMessage("flow", "response", 1), "data: two\n\n".toByteArray())
+        assertContentEquals(
+            "data: one\n\ndata: two\n\n".toByteArray(),
+            bodies.partial("flow", BodySide.RESPONSE),
+        )
+
+        // And it is gone from the pending set once the stream closes.
+        assertContentEquals("data: one\n\ndata: two\n\n".toByteArray(), bodies.end(end(size = 22)))
+        assertNull(bodies.partial("flow", BodySide.RESPONSE))
+        assertEquals(0L, bodies.received("flow", BodySide.RESPONSE))
+    }
+
+    @Test
+    fun `the partial snapshot is reused until another chunk lands`() {
+        val bodies = StreamedBodies()
+        bodies.chunk(BodyChunkMessage("flow", "response", 0), "first".toByteArray())
+
+        val once = bodies.partial("flow", BodySide.RESPONSE)
+        // Identity: a view asking every frame while nothing arrives must not
+        // copy the buffer every frame.
+        assertSame(once, bodies.partial("flow", BodySide.RESPONSE))
+
+        bodies.chunk(BodyChunkMessage("flow", "response", 1), "second".toByteArray())
+        assertContentEquals("firstsecond".toByteArray(), bodies.partial("flow", BodySide.RESPONSE))
     }
 
     @Test

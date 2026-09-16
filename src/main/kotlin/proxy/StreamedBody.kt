@@ -27,6 +27,11 @@ data class BodyEndMessage(
     val side: String,
     /** Bytes seen on the wire. */
     val size: Long = 0,
+    /**
+     * The same bytes with `Content-Encoding` undone, or `-1` when that could
+     * not be determined. Matches `content.size` on the completing frame.
+     */
+    val decodedSize: Long = -1,
     /** Bytes actually delivered as chunks; below [size] when chunks were dropped. */
     val captured: Long = 0,
     val chunks: Long = 0,
@@ -41,12 +46,19 @@ data class BodyEndMessage(
 /**
  * Reassembles bodies that arrive as `BodyChunk` frames instead of inline.
  *
- * A body past the sidecar's streaming threshold is forwarded chunk by chunk so
- * that a large download is never held whole in the proxy. It is held whole
- * *here*, though — the inspector shows bytes, not a stream — so assembly stops
- * at [limit] and keeps the prefix rather than letting one download decide the
- * heap. What is kept is still worth having: the head of a file is where its
- * type, headers and first records are.
+ * A body the sidecar will not hold is forwarded chunk by chunk: one too large
+ * to buffer, one still arriving a second after it began, or one whose
+ * `Content-Type` makes it a live stream — an SSE feed, gRPC, newline-delimited
+ * JSON — which streams from its first byte. It is held whole *here*, though —
+ * the inspector shows bytes, not a stream — so assembly stops at [limit] and
+ * keeps the prefix rather than letting one download decide the heap. What is
+ * kept is still worth having: the head of a file is where its type, headers and
+ * first records are.
+ *
+ * The last two cases are open-ended by nature, so [partial] hands over what has
+ * arrived while it is still arriving. A feed that holds a connection open for
+ * ten minutes would otherwise show nothing for ten minutes, which is the whole
+ * reason the sidecar stopped waiting for it to finish.
  *
  * Streamed bytes are also **not decoded** by mitmproxy: they come off the wire
  * with `Content-Encoding` still applied, unlike inline bodies. [end] undoes
@@ -63,6 +75,8 @@ class StreamedBodies(
     private class Pending {
         val bytes = ByteArrayOutputStream()
         var clipped = false
+        /** Last array handed to [partial], reused while no chunk has landed since. */
+        var snapshot: ByteArray? = null
     }
 
     private val pending = HashMap<String, Pending>()
@@ -79,6 +93,35 @@ class StreamedBodies(
             }
             entry.bytes.write(body, 0, minOf(room, body.size))
             if (body.size > room) entry.clipped = true
+            entry.snapshot = null
+        }
+    }
+
+    /** Bytes assembled so far for a body still arriving, or 0 for one that is not. */
+    fun received(id: String, side: BodySide): Long {
+        val entry = synchronized(pending) { pending[key(id, side.name)] } ?: return 0
+        return synchronized(entry) { entry.bytes.size().toLong() }
+    }
+
+    /**
+     * What has arrived so far, or null if this body is not mid-flight.
+     *
+     * Undecoded, unlike [end]: `Content-Encoding` travels on the `BodyEnd`
+     * frame, which by definition has not arrived yet, and the response headers
+     * do not reach this side until the flow completes either. In practice the
+     * bodies this matters for — event streams and the like — are sent
+     * uncompressed, because compressing a stream defeats flushing it. A
+     * compressed one reads as binary until it closes, at which point [end]
+     * decodes it properly and replaces this.
+     *
+     * The array is memoized until the next chunk lands, so a view that asks
+     * repeatedly while nothing arrives is not copying the buffer each time.
+     */
+    fun partial(id: String, side: BodySide): ByteArray? {
+        val entry = synchronized(pending) { pending[key(id, side.name)] } ?: return null
+        return synchronized(entry) {
+            if (entry.bytes.size() == 0) return@synchronized null
+            entry.snapshot ?: entry.bytes.toByteArray().also { entry.snapshot = it }
         }
     }
 

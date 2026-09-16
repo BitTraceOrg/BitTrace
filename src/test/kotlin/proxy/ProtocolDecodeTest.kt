@@ -5,10 +5,13 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import org.bittrace.data.CompleteRequestMessage
 import org.bittrace.data.CompleteResponseMessage
 import org.bittrace.data.ConnectRequestData
 import org.bittrace.data.InitialRequestData
 import org.bittrace.data.InitialResponseData
+import org.bittrace.data.requestBodySizeOf
+import org.bittrace.data.responseBodySizeOf
 
 /**
  * Field mapping against payloads the sidecar actually wrote.
@@ -80,24 +83,146 @@ class ProtocolDecodeTest {
     fun `a streamed response says so and leaves its body segment empty`() {
         val data = json.decodeFromString<CompleteResponseMessage>(
             """{"time":2241.08,"timings":{"receive":1843.42},"response":{"headers":[],"cookies":[],
-               "content":{"size":10485760,"mimeType":"application/zip"}},"_bodyStreamed":true,
+               "bodySize":3145728,"content":{"size":10485760,"wireSize":3145728,
+               "compression":7340032,"mimeType":"application/zip"}},"_bodyStreamed":true,
                "id":"b6087e56-3838-4dc3-bead-29b65d7b5ebf"}"""
         )
 
         assertTrue(data.bodyStreamed)
-        // The compressed wire length, for a streamed body — not the decoded one.
+        // Decoded, whether or not the body was streamed; the wire length is
+        // reported beside it and the two differ for a compressed body.
         assertEquals(10_485_760L, data.response.content.size)
+        assertEquals(3_145_728L, data.response.content.wireSize)
+        assertEquals(7_340_032L, data.response.content.compression)
+        assertEquals(3_145_728L, data.response.bodySize)
     }
 
     @Test
     fun `an inline response reports no streaming`() {
         val data = json.decodeFromString<CompleteResponseMessage>(
             """{"time":689.74,"timings":{"receive":0.93},"response":{"headers":[],"cookies":[],
-               "content":{"size":559,"mimeType":"text/html"}},"_bodyStreamed":false,
-               "id":"2b0f89ce-571d-40ef-bacf-bd1f0bec542d"}"""
+               "bodySize":559,"content":{"size":559,"wireSize":559,"mimeType":"text/html"}},
+               "_bodyStreamed":false,"id":"2b0f89ce-571d-40ef-bacf-bd1f0bec542d"}"""
         )
 
         assertFalse(data.bodyStreamed)
+    }
+
+    @Test
+    fun `the measured body size wins over the header the initial frame read`() {
+        // A chunked response: no Content-Length, so the initial frame can only
+        // report -1 and the size stayed unknown until this was added.
+        val head = json.decodeFromString<InitialResponseData>(
+            """{"time":12.4,"timings":{"blocked":-1,"dns":-1,"connect":-1,"send":0.1,"wait":12.2,
+               "receive":-1,"ssl":-1},"response":{"status":200,"statusText":"OK",
+               "httpVersion":"HTTP/2","headersSize":180,"bodySize":-1,"redirectURL":""},
+               "_error":false,"connection":"443","serverIPAddress":"93.184.216.34",
+               "id":"2b0f89ce-571d-40ef-bacf-bd1f0bec542d"}"""
+        )
+        val complete = json.decodeFromString<CompleteResponseMessage>(
+            """{"time":689.74,"timings":{"receive":0.93},"response":{"headers":[],"cookies":[],
+               "bodySize":1204,"content":{"size":4096,"wireSize":1204,"mimeType":"text/html"}},
+               "_bodyStreamed":false,"id":"2b0f89ce-571d-40ef-bacf-bd1f0bec542d"}"""
+        )
+
+        assertEquals(-1L, head.response.bodySize)
+        assertEquals(1204L, responseBodySizeOf(head, complete))
+        // Before the body finishes, the header hint is all there is.
+        assertEquals(-1L, responseBodySizeOf(head, null))
+    }
+
+    @Test
+    fun `an errored flow reports the part of the body that did arrive`() {
+        // No CompleteResponse follows an error, so these sizes are the only
+        // ones the flow will ever carry.
+        val head = json.decodeFromString<InitialResponseData>(
+            """{"time":802.1,"timings":{"blocked":-1,"dns":-1,"connect":-1,"send":0.2,"wait":31.0,
+               "receive":770.9,"ssl":-1},"response":{"status":0,"statusText":"Failed response",
+               "httpVersion":"HTTP/1.1","headersSize":142,"bodySize":-1,"redirectURL":"",
+               "content":{"size":65536,"wireSize":20480,"partial":true,
+               "mimeType":"application/octet-stream"}},"_error":true,"connection":"443",
+               "serverIPAddress":"93.184.216.34","id":"7d1b0f2e-0c4a-4a1b-9f43-2c1d9a5b6e77"}"""
+        )
+
+        assertTrue(head.error)
+        assertTrue(head.response.content!!.partial)
+        assertEquals(20_480L, responseBodySizeOf(head, null))
+    }
+
+    @Test
+    fun `a chunked upload is measured on the completing frame`() {
+        // Without Content-Length the initial frame reports 0 — a request with a
+        // body would otherwise show as having none.
+        val head = json.decodeFromString<InitialRequestData>(
+            """{"startedDateTime":"2026-09-05T23:29:33.154368+00:00","request":{"method":"POST",
+               "url":"https://example.com/upload","httpVersion":"HTTP/1.1","headersSize":142,
+               "bodySize":0,"queryString":[]},"clientConnectionId":"",
+               "id":"1f2e3d4c-5b6a-4798-8899-aabbccddeeff","_tls":"TLSv1.3"}"""
+        )
+        val complete = json.decodeFromString<CompleteRequestMessage>(
+            """{"id":"1f2e3d4c-5b6a-4798-8899-aabbccddeeff","_bodyStreamed":false,
+               "request":{"headers":[],"cookies":[],"bodySize":8192,
+               "postData":{"mimeType":"application/octet-stream"}}}"""
+        )
+
+        assertEquals(0L, head.request.bodySize)
+        assertEquals(8192L, requestBodySizeOf(head, complete))
+    }
+
+    @Test
+    fun `the first status frame arrives before there is an addon to ask`() {
+        // Sent at process start, before mitmproxy is initialized, so it carries
+        // only what the process itself knows.
+        val status = json.decodeFromString<ProxyStatus>(
+            """{"state":"starting","pid":24180,"port":8080,
+               "startedDateTime":"2026-09-16T18:02:11.412991+00:00","uptimeMs":0,
+               "intervalMs":60000,"mitmproxyVersion":"12.1.1"}"""
+        )
+
+        assertEquals(ProxyStatus.STARTING, status.state)
+        assertEquals(24180L, status.pid)
+        assertEquals(60_000L, status.intervalMs)
+        // Nothing is bound yet, which is not the same failure as being up
+        // without a port.
+        assertFalse(status.bound)
+        assertFalse(status.portLost)
+    }
+
+    @Test
+    fun `a running status says what it bound and how it is coping`() {
+        val status = json.decodeFromString<ProxyStatus>(
+            """{"state":"running","pid":24180,"port":8080,
+               "startedDateTime":"2026-09-16T18:02:11.412991+00:00","uptimeMs":180432,
+               "intervalMs":60000,"mitmproxyVersion":"12.1.1",
+               "listenAddrs":["127.0.0.1:8080"],"connections":6,
+               "queue":{"depth":12,"maxSize":4096},"openBodies":2,
+               "counters":{"requests":418,"responses":417,"errors":1,"connects":54,
+               "droppedFrames":0}}"""
+        )
+
+        assertTrue(status.bound)
+        assertEquals("127.0.0.1:8080", status.address)
+        assertEquals(6, status.connections)
+        assertEquals(418L, status.counters.requests)
+        assertEquals(12, status.queue.depth)
+    }
+
+    @Test
+    fun `running with nothing bound is the failure that looks like success`() {
+        val status = json.decodeFromString<ProxyStatus>(
+            """{"state":"running","pid":24180,"port":8080,
+               "startedDateTime":"2026-09-16T18:02:11.412991+00:00","uptimeMs":1204,
+               "intervalMs":60000,"mitmproxyVersion":"12.1.1","listenAddrs":[],
+               "connections":0,"queue":{"depth":0,"maxSize":4096},"openBodies":0,
+               "counters":{"requests":0,"responses":0,"errors":0,"connects":0,
+               "droppedFrames":7}}"""
+        )
+
+        assertTrue(status.portLost)
+        assertFalse(status.bound)
+        // The port it asked for, since there is no bound address to show.
+        assertEquals("8080", status.address)
+        assertEquals(7L, status.counters.droppedFrames)
     }
 
     @Test
@@ -109,12 +234,15 @@ class ProtocolDecodeTest {
         assertEquals(42L, chunk.seq)
 
         val end = json.decodeFromString<BodyEndMessage>(
-            """{"id":"b6087e56-3838-4dc3-bead-29b65d7b5ebf","side":"response","size":10485760,
-               "captured":10485760,"chunks":160,"dropped":0,"truncated":false,"aborted":false,
-               "contentEncoding":""}"""
+            """{"id":"b6087e56-3838-4dc3-bead-29b65d7b5ebf","side":"response","size":3145728,
+               "decodedSize":10485760,"captured":3145728,"chunks":48,"dropped":0,
+               "truncated":false,"aborted":false,"contentEncoding":"gzip"}"""
         )
-        assertEquals(10_485_760L, end.size)
-        assertEquals(160L, end.chunks)
+        assertEquals(3_145_728L, end.size)
+        // What the matching CompleteResponse reports as content.size: the
+        // chunks themselves arrive still gzipped.
+        assertEquals(10_485_760L, end.decodedSize)
+        assertEquals(48L, end.chunks)
         assertFalse(end.truncated)
     }
 }

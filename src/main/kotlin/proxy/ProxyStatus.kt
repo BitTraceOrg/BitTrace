@@ -41,6 +41,8 @@ data class ProxyStatus(
     val queue: QueueDepth = QueueDepth(),
     /** Flows whose body is mid-capture. */
     val openBodies: Int = 0,
+    /** WebSocket connections still open. */
+    val openSockets: Int = 0,
     val counters: Counters = Counters(),
     /** The addon's extras could not be collected; the rest of the frame stands. */
     val statsError: String? = null,
@@ -61,11 +63,16 @@ data class ProxyStatus(
         val responses: Long = 0,
         val errors: Long = 0,
         val connects: Long = 0,
+        /** WebSocket connections seen, counted at their handshake. */
+        val webSockets: Long = 0,
+        /** Messages across all of them, both directions. */
+        val webSocketMessages: Long = 0,
         /**
          * Metadata frames the sidecar discarded because its queue stayed full.
          * Non-zero means entries held here are missing parts that will never
          * arrive. Dropped *body* chunks are counted separately, per body, on
-         * [BodyEndMessage].
+         * [BodyEndMessage], and dropped WebSocket messages per connection on
+         * [org.bittrace.data.WebSocketEndData].
          */
         val droppedFrames: Long = 0,
     )

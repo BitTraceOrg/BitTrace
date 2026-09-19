@@ -1,6 +1,7 @@
 package org.bittrace.api
 
 import com.fasterxml.jackson.core.JsonFactory
+import kotlinx.serialization.EncodeDefault
 import kotlinx.serialization.Serializable
 import java.io.StringWriter
 import java.util.Base64
@@ -45,12 +46,26 @@ data class ApiRequest(
     fun activeCookies(): List<KeyValue> = cookies.filter { it.enabled && it.name.isNotBlank() }
 }
 
-/** A header or query parameter row. */
+/** A header, query parameter or variable row. */
 @Serializable
 data class KeyValue(
     val name: String = "",
     val value: String = "",
     val enabled: Boolean = true,
+    /**
+     * What this row is for, in the author's words.
+     *
+     * Only the variables table offers it — a header's name is already its
+     * documentation, where `{{tenant}}` three files away is not.
+     *
+     * `NEVER` rather than letting [appYaml]'s `encodeDefaults = true` write it:
+     * this field is on the row type every request's headers and params are made
+     * of, so without it, adding it here would have appended `description: ""` to
+     * every one of those lines in every saved request the next time it was
+     * touched — a diff across the whole collection that says nothing.
+     */
+    @EncodeDefault(EncodeDefault.Mode.NEVER)
+    val description: String = "",
 )
 
 /**

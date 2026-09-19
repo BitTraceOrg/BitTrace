@@ -26,6 +26,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
 import kotlin.concurrent.thread
+import kotlin.io.path.nameWithoutExtension
 import org.bittrace.api.ApiClientState
 import org.bittrace.api.CollectionStore
 import org.bittrace.api.ProjectVariables
@@ -51,7 +52,12 @@ import org.bittrace.ui.components.MenuBar
 import org.bittrace.ui.layouts.inspector.components.Outcome
 import org.bittrace.ui.components.Rail
 import org.bittrace.ui.layouts.settings.SettingsView
+import org.bittrace.ui.layouts.forge.components.ForgeGitCommands
+import org.bittrace.ui.layouts.forge.components.ForgeSelection
+import org.bittrace.ui.layouts.forge.components.branchTint
+import org.bittrace.ui.components.BranchCell
 import org.bittrace.ui.components.StatusBar
+import org.bittrace.ui.components.StatusContext
 import org.bittrace.data.ActivityStore
 import org.bittrace.data.LogStore
 import org.bittrace.data.SessionStore
@@ -253,6 +259,15 @@ private fun DecoratedWindowScope.App(
     var markedIds by remember { mutableStateOf<List<String>>(emptyList()) }
     val history = remember { HistoryStore() }
     // Hoisted above the view: `when (nav)` swaps the subtree, and a scope owned
+    // What the Forge can be asked to do from outside it — the status bar's
+    // branch menu. Held here because this is what composes both of them; the
+    // Forge fills it in, and it does nothing until it has.
+    val forgeGit = remember { ForgeGitCommands() }
+
+    // What the Forge has selected, so the app menu can grey out the entries
+    // that need a collection to act on.
+    val forgeSelection = remember { ForgeSelection() }
+
     // by the view would cancel an in-flight request the moment someone switched
     // to Traffic to watch the flow arrive.
     val api = remember {
@@ -298,8 +313,12 @@ private fun DecoratedWindowScope.App(
                 },
                 onClearSelection = { selectedId = null },
                 onNewSession = { service.clear() },
-                onNewRequest = { api.open(org.bittrace.api.ApiRequest(), null); nav = "api" },
-                onImportRequest = { importOpen = true },
+                // Null until the Forge says a collection is selected, which is
+                // what greys both entries out.
+                onNewRequest = forgeSelection.collection?.let {
+                    { api.open(org.bittrace.api.ApiRequest(), null); nav = "api" }
+                },
+                onImportRequest = forgeSelection.collection?.let { { importOpen = true } },
                 onNewProject = {
                     nav = "api"
                     collections.createNamedProject()
@@ -321,7 +340,6 @@ private fun DecoratedWindowScope.App(
                 onClearHistory = if (history.entries.isEmpty()) null else {
                     { history.clear() }
                 },
-                onSendRequest = { nav = "api"; api.send() },
                 onEditFlow = selectedId?.let { id ->
                     {
                         store.get(id)?.let { row ->
@@ -330,7 +348,6 @@ private fun DecoratedWindowScope.App(
                         }
                     }
                 },
-                apiBusy = api.busy,
                 onImportSession = if (sessionBusy) null else {
                     {
                         // The dialog is modal on the event thread; the read that
@@ -414,6 +431,8 @@ private fun DecoratedWindowScope.App(
                         ApiView(
                             api, collections, history, store, service, settings, formatters,
                             git, collectionActions, window,
+                            commands = forgeGit,
+                            selection = forgeSelection,
                             onLog = { level, message -> logs.add(level, "forge", message) },
                         )
                     }
@@ -439,14 +458,6 @@ private fun DecoratedWindowScope.App(
         val rows = store.rows
         val ok = rows.count { it.failed == false }
         val failed = rows.count { it.failed == true }
-        // Headers and bodies, both directions — what actually crossed the wire,
-        // not just the payloads. HAR writes -1 for a size it does not know, so
-        // every term is floored at zero rather than allowed to subtract.
-        val captured = rows.sumOf { r ->
-            val headers = r.request.request.headersSize.coerceAtLeast(0) +
-                (r.response?.response?.headersSize?.coerceAtLeast(0) ?: 0L)
-            headers + r.requestBodySize.coerceAtLeast(0) + (r.responseBodySize?.coerceAtLeast(0) ?: 0L)
-        }
         // Tool windows are siblings of the main one and live inside the same
         // composition, so they inherit the theme without being told about it.
         tools.open.forEach { tool ->
@@ -481,31 +492,83 @@ private fun DecoratedWindowScope.App(
         // headers, whereas a query survives the band collapsing and this cell is
         // the only place that still says it is running.
         val queryOrigin = remember(rows.size) { originOf(rows) }
+        // What the bar reports follows the rail: the inspector's readings are
+        // about captured traffic and the Forge's is about the request in front
+        // of you, and neither says anything true on the other's panel. Home and
+        // Settings report nothing of their own, which leaves the bar as its two
+        // app-wide controls — which is the honest amount for a panel that is
+        // not showing you anything countable.
+        val status = when (nav) {
+            "traffic" -> StatusContext.Inspector(
+                flows = rows.size,
+                // The band seeds a default minute-wide window, so a bare "is
+                // there a window" test would have this cell claiming a query
+                // from launch. What it reports is the count, which is true
+                // either way.
+                query = if (query.isEmpty) null else query.describe(),
+                queryMatches = if (query.isEmpty) rows.size else rows.count { query.matches(it, queryOrigin, bodyHits) },
+                ok = ok,
+                failed = failed,
+                okFilterOn = outcome == Outcome.OK,
+                failedFilterOn = outcome == Outcome.FAILED,
+                // Clicking the active filter clears it, so the same cell toggles.
+                onFilterOk = { outcome = if (outcome == Outcome.OK) Outcome.ALL else Outcome.OK },
+                onFilterFailed = { outcome = if (outcome == Outcome.FAILED) Outcome.ALL else Outcome.FAILED },
+            )
+            // The open request's file is the only input: the collections layout
+            // is projects containing collections containing requests, so the
+            // path it was saved at already says where it lives, and the project
+            // is what has a branch. An unsaved draft has no path, and `label`
+            // is null for a folder that is not a repository, so both arrive as
+            // "nothing to show" without a special case.
+            //
+            // Both lookups are path arithmetic against the collections root —
+            // no filesystem walk for a request, which is the only depth that
+            // reaches here — and `stateOf` is the same cached read the tree
+            // makes for its own branch chips. Safe to do per frame.
+            "api" -> {
+                val open = api.openPath
+                val project = open?.let { collections.projectOf(it) }
+                StatusContext.Forge(
+                    project = project?.fileName?.toString(),
+                    collection = open?.let { collections.collectionFor(it) }?.fileName?.toString(),
+                    // The stem, because that is what the tree labels a request
+                    // row with and the trail is the same three levels it draws.
+                    request = open?.nameWithoutExtension,
+                    // The whole cell, not just a name: the bar's branch is a
+                    // picker now, and the shade and the switch both come from
+                    // the Forge so that one repository cannot read one way here
+                    // and another in the project tab.
+                    branch = project?.let { dir ->
+                        val repo = git.stateOf(dir)
+                        repo.label?.let { label ->
+                            BranchCell(
+                                label = label,
+                                tint = branchTint(repo),
+                                current = repo.branch,
+                                // Nothing to pick on a detached HEAD.
+                                options = if (repo.detached) emptyList() else repo.branches,
+                                onSelect = { picked -> forgeGit.switchBranch(dir, picked) },
+                                onNewBranch = { forgeGit.newBranch(dir) },
+                            )
+                        }
+                    },
+                )
+            }
+            else -> StatusContext.None
+        }
         StatusBar(
-            flows = rows.size,
+            context = status,
             // Whichever is running. Git wins a tie: it is the one that can take
             // seconds and the one where knowing something is still happening
             // stops a second click.
             busy = git.busyLabel ?: "Searching bodies…".takeIf { scanning },
-            // The band seeds a default minute-wide window, so a bare "is there a
-            // window" test would have this cell claiming a query from launch.
-            // What it reports is the count, which is true either way.
-            query = if (query.isEmpty) null else query.describe(),
-            queryMatches = if (query.isEmpty) rows.size else rows.count { query.matches(it, queryOrigin, bodyHits) },
-            ok = ok,
-            failed = failed,
-            captured = captured,
             // A lambda, so the row walk behind the estimate only happens when
             // the panel is actually opened.
             nerdStats = { NerdStats(store.size, store.estimatedBytes(), service.bodies.bytes) },
             logsOpen = logsOpen,
             warn = logs.warnCount,
             error = logs.errorCount,
-            okFilterOn = outcome == Outcome.OK,
-            failedFilterOn = outcome == Outcome.FAILED,
-            // Clicking the active filter clears it, so the same cell toggles.
-            onFilterOk = { outcome = if (outcome == Outcome.OK) Outcome.ALL else Outcome.OK },
-            onFilterFailed = { outcome = if (outcome == Outcome.FAILED) Outcome.ALL else Outcome.FAILED },
             onToggleLogs = { logsOpen = !logsOpen },
         )
     }
@@ -528,15 +591,13 @@ private fun appMenus(
     onToggleLayout: () -> Unit,
     onClearSelection: () -> Unit,
     onNewSession: () -> Unit,
-    onNewRequest: () -> Unit,
-    onImportRequest: () -> Unit,
+    onNewRequest: (() -> Unit)?,
+    onImportRequest: (() -> Unit)?,
     onNewProject: () -> Unit,
     onNewCollection: () -> Unit,
     onRefreshProjects: () -> Unit,
     onClearHistory: (() -> Unit)?,
-    onSendRequest: () -> Unit,
     onEditFlow: (() -> Unit)?,
-    apiBusy: Boolean,
     onImportSession: (() -> Unit)?,
     onExportSession: (() -> Unit)?,
     busy: Boolean,
@@ -562,13 +623,41 @@ private fun appMenus(
         "Forge",
         listOf(
             MenuAction("Open Request Forge") { onNav("api") },
-            // Authoring one request: make it, fill it, send it.
-            MenuAction("New request", separatorBefore = true, onClick = onNewRequest),
+            // The projects group, out of the submenu it used to be folded into
+            // and up under the entry that opens the panel it belongs to. These
+            // are the things you do *to* the collection tree, and they read as
+            // a set — which a submenu said by hiding them and a rule on either
+            // side says without the extra click.
+            MenuAction("New project", separatorBefore = true, onClick = onNewProject),
+            MenuAction("New collection", onClick = onNewCollection),
+            MenuAction("Refresh from disk", onClick = onRefreshProjects),
+            // Keeps the rule it had inside the submenu. It is the one entry
+            // here that destroys something, and the divider is what stops it
+            // being read as one more of the three above it.
+            MenuAction("Clear request history", separatorBefore = true, onClick = onClearHistory),
+            // Both need somewhere to go. A request belongs to a collection, and
+            // making one with nothing selected used to leave a draft the tree
+            // could not show — so they are disabled until there is a collection
+            // to make it in, and say which is missing rather than going quiet.
+            //
+            // No Send here. It needs a request already open and filled in, and
+            // the button beside the URL is where that request is; a menu entry
+            // that only works when you are already looking at the thing it acts
+            // on is a keyboard shortcut wearing a menu's clothes.
+            MenuAction(
+                "New request",
+                hint = if (onNewRequest == null) "select a collection" else "",
+                separatorBefore = true,
+                onClick = onNewRequest,
+            ),
             // Not "Import from clipboard": this opens a dialog to paste into,
             // and a label promising a silent clipboard read described an
             // action the entry does not take.
-            MenuAction("Import request…", hint = "cURL", onClick = onImportRequest),
-            MenuAction("Send", hint = if (apiBusy) "sending" else "", onClick = if (apiBusy) null else onSendRequest),
+            MenuAction(
+                "Import request…",
+                hint = if (onImportRequest == null) "select a collection" else "cURL",
+                onClick = onImportRequest,
+            ),
             // The point of pairing a proxy with a client: replay what was
             // actually observed. Disabled with nothing selected, and on its own
             // because it is the one entry that reaches across to the grid.
@@ -577,19 +666,6 @@ private fun appMenus(
                 hint = if (onEditFlow == null) "select a flow" else "",
                 separatorBefore = true,
                 onClick = onEditFlow,
-            ),
-            // Everything about stored requests, folded away: it is the part of
-            // this menu reached least often, and flattening it would put a
-            // destructive entry next to "New request".
-            MenuAction(
-                "Projects",
-                separatorBefore = true,
-                submenu = listOf(
-                    MenuAction("New project", onClick = onNewProject),
-                    MenuAction("New collection", onClick = onNewCollection),
-                    MenuAction("Refresh from disk", onClick = onRefreshProjects),
-                    MenuAction("Clear request history", separatorBefore = true, onClick = onClearHistory),
-                ),
             ),
         ),
     ),

@@ -2,6 +2,7 @@ package org.bittrace.data
 
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.snapshots.Snapshot
 import androidx.compose.runtime.snapshots.SnapshotStateList
 import java.awt.EventQueue
 
@@ -116,6 +117,9 @@ class SessionStore(
                 complete.headers.forEach { total += PAIR_OVERHEAD + chars(it.name) + chars(it.value) }
                 complete.cookies.forEach { total += PAIR_OVERHEAD + chars(it.name) + chars(it.value) }
             }
+            // A WebSocket transcript is held on the row rather than in
+            // `BodyCache`, so it is counted here or it is not counted anywhere.
+            row.webSocketMessages.forEach { total += ROW_OVERHEAD + it.payload.size }
         }
         return total
     }
@@ -191,6 +195,43 @@ class SessionStore(
     fun onStreamProgress(id: String, request: Boolean, received: Long): Unit = onUi {
         val row = byId[id] ?: return@onUi
         if (request) row.streamedRequestBytes = received else row.streamedResponseBytes = received
+    }
+
+    /**
+     * Appends one WebSocket message to its flow's transcript.
+     *
+     * Bounded on both counts, because a WebSocket is the one flow with no
+     * natural end: a feed that pushes a message a second all afternoon would
+     * otherwise grow a row without limit, and unlike a body there is no
+     * completing frame to stop it. Past either cap the oldest messages go and
+     * [TrafficRow.webSocketEvicted] counts them, so the transcript says it is a
+     * tail rather than quietly appearing to be the whole conversation.
+     *
+     * The newest are the ones kept. For a connection being watched live, what
+     * just arrived is the reason the pane is open.
+     */
+    fun onWebSocketMessage(id: String, record: WebSocketRecord): Unit = onUi {
+        val row = byId[id] ?: return@onUi
+        row.webSocketMessages.add(record)
+        row.webSocketBytes += record.payload.size
+
+        var evicted = 0L
+        // The size guard on the byte cap keeps the newest message, however
+        // large: a single 4 MiB frame is still the thing being looked at, and
+        // evicting it would leave a transcript that drops every message it
+        // receives.
+        while (row.webSocketMessages.size > MAX_SOCKET_MESSAGES ||
+            (row.webSocketBytes > MAX_SOCKET_BYTES && row.webSocketMessages.size > 1)
+        ) {
+            row.webSocketBytes -= row.webSocketMessages.removeAt(0).payload.size
+            evicted++
+        }
+        if (evicted > 0) row.webSocketEvicted += evicted
+    }
+
+    /** The connection closed; its totals stay on the row beside the transcript. */
+    fun onWebSocketEnd(message: WebSocketEndData): Unit = onUi {
+        byId[message.id]?.webSocketEnd = message
     }
 
     // --- import ---
@@ -275,13 +316,88 @@ class SessionStore(
         exportMarks.removeAll { it.afterRowCount < oldest }
     }
 
+    /**
+     * Mutations handed over by the reader thread, waiting for the event thread.
+     *
+     * The reason this exists is the same one [importBatch] gives for batching a
+     * HAR: posting one runnable per message does little but marshal runnables,
+     * and each write is its own snapshot. A flow is four messages, a streamed
+     * body adds a progress message per throttle window, and the sidecar can
+     * emit thousands of frames a second — so the live path was paying exactly
+     * the cost the import path was written to avoid.
+     *
+     * Guarded by [queueLock] rather than being a concurrent queue: the drain
+     * has to take everything and reset [drainScheduled] in the same breath, or
+     * a mutation handed over between the two would sit in the queue with
+     * nothing scheduled to come back for it.
+     */
+    private val queueLock = Any()
+    private val queued = ArrayDeque<() -> Unit>()
+    private var drainScheduled = false
+
+    /**
+     * Runs [block] on the event thread, batched with whatever else is waiting.
+     *
+     * Already on the event thread, it runs now — but only after draining what
+     * is queued, so a UI action cannot overtake capture events that were handed
+     * over before it. That ordering is the whole reason this is not simply a
+     * post: `clear()` arrives this way, and rows added ahead of it that landed
+     * behind it would survive being cleared.
+     */
     private inline fun onUi(crossinline block: () -> Unit) {
-        if (EventQueue.isDispatchThread()) block() else EventQueue.invokeLater { block() }
+        if (EventQueue.isDispatchThread()) {
+            drainQueued()
+            block()
+            return
+        }
+        val needsSchedule = synchronized(queueLock) {
+            queued.addLast { block() }
+            if (drainScheduled) false else { drainScheduled = true; true }
+        }
+        if (needsSchedule) EventQueue.invokeLater(::drain)
     }
 
     /** Like [onUi] but waits, for the few callers that need a result back. */
     private inline fun onUiBlocking(crossinline block: () -> Unit) {
-        if (EventQueue.isDispatchThread()) block() else EventQueue.invokeAndWait { block() }
+        if (EventQueue.isDispatchThread()) {
+            drainQueued()
+            block()
+        } else {
+            EventQueue.invokeAndWait { drainQueued(); block() }
+        }
+    }
+
+    /**
+     * Applies one batch, then re-posts if more arrived while it was applying.
+     *
+     * Re-posting rather than looping until empty: a capture fast enough to
+     * refill the queue mid-drain would otherwise hold the event thread for as
+     * long as it kept up, and the rows being added would never be painted. A
+     * fresh event gives the frame a turn between batches.
+     */
+    private fun drain() {
+        drainQueued()
+        val more = synchronized(queueLock) {
+            if (queued.isEmpty()) drainScheduled = false
+            drainScheduled
+        }
+        if (more) EventQueue.invokeLater(::drain)
+    }
+
+    /**
+     * Applies everything queued at the moment of the call, in arrival order.
+     *
+     * One mutable snapshot around the batch, so a hundred rows arriving
+     * together commit once instead of a hundred times. Call on the event thread.
+     */
+    private fun drainQueued() {
+        val batch = synchronized(queueLock) {
+            if (queued.isEmpty()) return
+            val taken = ArrayList<() -> Unit>(queued)
+            queued.clear()
+            taken
+        }
+        Snapshot.withMutableSnapshot { batch.forEach { it() } }
     }
 
     private var nextMarkId = 1L
@@ -289,6 +405,12 @@ class SessionStore(
     private companion object {
         /** Live rows held during an import before giving up and letting the run split. */
         const val MAX_DEFERRED = 5_000
+
+        /** Messages kept per WebSocket; see [onWebSocketMessage]. */
+        const val MAX_SOCKET_MESSAGES = 5_000
+
+        /** Payload bytes kept per WebSocket, across all of its messages. */
+        const val MAX_SOCKET_BYTES = 16L * 1024 * 1024
 
         /** A row plus its nested heads, references and snapshot state holders. */
         private const val ROW_OVERHEAD = 512L

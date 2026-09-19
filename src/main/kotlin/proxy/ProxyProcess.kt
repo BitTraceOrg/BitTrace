@@ -16,6 +16,8 @@ import org.bittrace.data.CompleteResponseMessage
 import org.bittrace.data.ConnectRequestData
 import org.bittrace.data.InitialRequestData
 import org.bittrace.data.InitialResponseData
+import org.bittrace.data.WebSocketEndData
+import org.bittrace.data.WebSocketMessageData
 
 /**
  * Runs the MITMConnect sidecar and turns its stdout into typed traffic events.
@@ -236,6 +238,14 @@ class ProxyProcess(
             Tags.BODY_END ->
                 decode<BodyEndMessage>("proxy-body-end", frame.json)
                     ?.let(listener::onBodyEnd)
+
+            Tags.WEBSOCKET_MESSAGE ->
+                decode<WebSocketMessageData>("proxy-websocket-message", frame.json)
+                    ?.let { listener.onWebSocketMessage(it, frame.body) }
+
+            Tags.WEBSOCKET_END ->
+                decode<WebSocketEndData>("proxy-websocket-end", frame.json)
+                    ?.let(listener::onWebSocketEnd)
 
             Tags.STATUS ->
                 decode<ProxyStatus>("proxy-status", frame.json)?.let { status ->

@@ -85,6 +85,28 @@ class CommitEntry(
 
 class CheckoutReport(val branch: String)
 
+/**
+ * What restoring the tree to an old commit touched.
+ *
+ * Counts rather than paths: the panel that asks for this already lists the
+ * commit's own files beside the button, and the message only has to say how
+ * much moved.
+ */
+class RestoreReport(val restored: Int, val removed: Int) {
+    val touched: Int get() = restored + removed
+}
+
+/**
+ * What a rebase did, or where it stopped.
+ *
+ * [conflicts] non-empty means JGit stopped part-way and the repository is
+ * sitting in a rebase: the working tree has markers in it and `.git` holds the
+ * rest of the sequence. Deliberately not aborted — see `GitService.rebase`.
+ */
+class RebaseReport(val upToDate: Boolean, val replayed: Int, val conflicts: List<String>) {
+    val stopped: Boolean get() = conflicts.isNotEmpty()
+}
+
 class PullReport(val fastForwarded: Boolean, val commits: Int)
 
 class FetchReport(val updated: List<String>)

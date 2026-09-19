@@ -200,6 +200,133 @@ internal fun highlightGraphQl(text: String): List<Span> {
     return spans.build()
 }
 
+// --- CSS ---
+
+/**
+ * CSS, classified by where a token sits rather than by what it is.
+ *
+ * A stylesheet has almost no keywords: `color` and `red` are both ordinary
+ * words, and what tells them apart is the colon between them. So this tracks
+ * where it is — in a declaration block, and past the colon — and colours on
+ * that. The same word is a property before the colon and a value after it,
+ * which is what a reader wants to see.
+ *
+ * "In a block" is not one bit, because `@media { .card { … } }` has two kinds
+ * of block: an at-rule holds *rules*, where `.card` is still a selector, and a
+ * rule holds *declarations*. A depth of booleans keeps the two apart — with a
+ * single flag, everything inside a media query came out coloured as if it were
+ * a property.
+ *
+ * At-rules, ids, classes and pseudo-selectors keep their sigil in the span,
+ * because in a selector the `.` and the `#` are part of the name.
+ */
+internal fun highlightCss(text: String): List<Span> {
+    val spans = Spans()
+    var i = 0
+    // Whether the innermost block holds declarations (a rule) rather than more
+    // rules (an at-rule), and the enclosing answers to restore on `}`.
+    var declarations = false
+    val enclosing = ArrayDeque<Boolean>()
+    // An `@` has been seen, so the block it opens holds rules, not declarations.
+    var atRule = false
+    // Past the `:` of a declaration, so words are values rather than properties.
+    var inValue = false
+
+    while (i < text.length) {
+        val c = text[i]
+        when {
+            // CSS has no line comments — `//` is a syntax error, not a comment,
+            // so treating it as one would hide real text.
+            c == '/' && i + 1 < text.length && text[i + 1] == '*' -> {
+                val close = text.indexOf("*/", i + 2)
+                val end = if (close < 0) text.length else close + 2
+                spans.add(i, end, TokenKind.COMMENT)
+                i = end
+            }
+
+            c == '"' || c == '\'' -> {
+                val end = stringEnd(text, i)
+                spans.add(i, end, TokenKind.STRING)
+                i = end
+            }
+
+            // A hex colour, not a number: `#fff` in a value and an id in a
+            // selector share the sigil and mean different things.
+            c == '#' -> {
+                val end = wordEnd(text, i + 1, extra = "-_")
+                spans.add(i, end, if (inValue) TokenKind.NUMBER else TokenKind.ATTRIBUTE)
+                i = end
+            }
+
+            c == '@' -> {
+                atRule = true
+                val end = wordEnd(text, i + 1, extra = "-_")
+                spans.add(i, end, TokenKind.KEYWORD)
+                i = end
+            }
+
+            c == '.' && i + 1 < text.length && text[i + 1].isLetter() && !declarations -> {
+                val end = wordEnd(text, i + 1, extra = "-_")
+                spans.add(i, end, TokenKind.ATTRIBUTE)
+                i = end
+            }
+
+            // A pseudo-class or pseudo-element. The letter test is what keeps
+            // `@media (min-width:600px)` out of it — a colon followed by a
+            // digit is a value, not `:hover`.
+            c == ':' && !declarations && i + 1 < text.length && text[i + 1].isLetter() -> {
+                val end = wordEnd(text, i + 1, extra = "-_:")
+                spans.add(i, end, TokenKind.META)
+                i = end
+            }
+
+            c.isDigit() || (c == '-' && i + 1 < text.length && text[i + 1].isDigit()) -> {
+                var end = numberEnd(text, i)
+                // The unit belongs to the number: `16px` reads as one value,
+                // and colouring `px` as a separate word says it is a keyword.
+                end = wordEnd(text, end, extra = "%")
+                spans.add(i, end, TokenKind.NUMBER)
+                i = end
+            }
+
+            c.isLetter() || c == '-' || c == '_' -> {
+                val end = wordEnd(text, i, extra = "-_")
+                val kind = when {
+                    !declarations -> TokenKind.TAG
+                    inValue -> TokenKind.LITERAL
+                    else -> TokenKind.PROPERTY
+                }
+                spans.add(i, end, kind)
+                i = end
+            }
+
+            else -> {
+                when (c) {
+                    '{' -> {
+                        enclosing.addLast(declarations)
+                        declarations = !atRule
+                        atRule = false
+                        inValue = false
+                    }
+
+                    '}' -> {
+                        declarations = enclosing.removeLastOrNull() ?: false
+                        inValue = false
+                    }
+
+                    ':' -> inValue = true
+                    ';' -> { inValue = false; atRule = false }
+                }
+                if (c in CSS_PUNCT) spans.add(i, i + 1, TokenKind.PUNCTUATION)
+                i++
+            }
+        }
+    }
+    return spans.build()
+}
+
+private const val CSS_PUNCT = "{}();:,>+~*=[]"
+
 // --- XML / HTML ---
 
 internal fun highlightMarkup(text: String): List<Span> {

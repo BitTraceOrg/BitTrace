@@ -71,15 +71,52 @@ sealed interface EditorTab {
     var dirty: Boolean
 }
 
-/** A project's variables, open for editing. */
-class VariablesTab(
+/** Which face of a project is on show. */
+enum class ProjectSection(val label: String) {
+    Overview("Overview"),
+    Variables("Variables"),
+    Git("Git"),
+}
+
+/**
+ * A project, open for editing: what it holds, its variables and its git controls.
+ *
+ * One tab with a section rather than three tabs, because they are three views
+ * of one folder — and because the alternative lets two tabs each think they own
+ * the same directory.
+ *
+ * [dirty] tracks the variables, the one thing here that is edited rather than
+ * read, which is what keeps the checkout guard and `saveAll` working off
+ * `EditorTab.dirty` alone.
+ */
+class ProjectTab(
     override val id: Long,
     val project: java.nio.file.Path,
     rows: List<KeyValue>,
+    section: ProjectSection = ProjectSection.Overview,
 ) : EditorTab {
     var rows by mutableStateOf(rows)
+
+    /**
+     * Held on the tab, not in the pane's composition: switching to another tab
+     * and back would otherwise drop you on Overview every time, and the section
+     * you were last on is the one you are working in.
+     */
+    var section by mutableStateOf(section)
     override var dirty by mutableStateOf(false)
-    override val title: String get() = "Variables"
+
+    /** The folder's own name — "Variables" told you nothing when two were open. */
+    val projectName: String get() = project.fileName?.toString() ?: project.toString()
+
+    /**
+     * What the editor strip shows.
+     *
+     * Named for the project rather than the section: the strip is a list of
+     * what is open, and a tab that renamed itself to "BitTrace Git" as you
+     * clicked through the sections would make the strip shuffle under the
+     * cursor. The section you are on is visible in the pane itself.
+     */
+    override val title: String get() = "$projectName Overview"
 }
 
 class RequestTab(
@@ -215,7 +252,7 @@ class ApiClientState(
     fun dirtyTabsUnder(project: java.nio.file.Path): List<EditorTab> = tabs.filter { tab ->
         tab.dirty && when (tab) {
             is RequestTab -> tab.openPath?.startsWith(project) == true
-            is VariablesTab -> tab.project == project
+            is ProjectTab -> tab.project == project
         }
     }
 
@@ -243,11 +280,11 @@ class ApiClientState(
         var reloaded = 0
         var orphaned = 0
         var failed = 0
-        // A clean variables table under this project is re-read too: git has
-        // just replaced the file, and a pane still showing the old branch's
-        // values would substitute them into the next send and write them back
-        // over the new branch's on the next save.
-        tabs.filterIsInstance<VariablesTab>()
+        // A clean project tab under this project is re-read too: git has just
+        // replaced the file, and a pane still showing the old branch's values
+        // would substitute them into the next send and write them back over the
+        // new branch's on the next save.
+        tabs.filterIsInstance<ProjectTab>()
             .filter { it.project == project && !it.dirty }
             .forEach { it.rows = ProjectVariables.read(it.project) }
 
@@ -402,19 +439,33 @@ class ApiClientState(
      * tab, since there is nothing to collide with.
      */
     /**
-     * Opens [project]'s variables, or focuses the tab already showing them.
+     * Opens [project], or focuses the tab already showing it, on [section].
      *
-     * Reading from disk on open rather than holding a cache: the file is
-     * ordinary project content that a checkout or a pull can replace, and the
-     * tab is where you would notice it had.
+     * Reading from disk on open rather than holding a cache: these are ordinary
+     * project files that a checkout or a pull can replace, and the tab is where
+     * you would notice they had.
+     *
+     * An already-open tab is moved to [section] rather than left where it was.
+     * Both routes in name a section — a double-click on the row means Overview,
+     * the Variables row means Variables — so honouring it is what makes the
+     * second click on either do what it says.
      */
-    fun openVariables(project: java.nio.file.Path): VariablesTab {
-        val existing = tabs.filterIsInstance<VariablesTab>().firstOrNull { it.project == project }
+    fun openProject(
+        project: java.nio.file.Path,
+        section: ProjectSection = ProjectSection.Overview,
+    ): ProjectTab {
+        val existing = tabs.filterIsInstance<ProjectTab>().firstOrNull { it.project == project }
         if (existing != null) {
+            existing.section = section
             activeId = existing.id
             return existing
         }
-        val tab = VariablesTab(nextTabId++, project, ProjectVariables.read(project))
+        val tab = ProjectTab(
+            nextTabId++,
+            project,
+            ProjectVariables.read(project),
+            section,
+        )
         val blank = activeRequest?.takeIf {
             it.openPath == null && !it.dirty && it.request == ApiRequest()
         }

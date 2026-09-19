@@ -50,6 +50,114 @@ class GitServiceTest {
         return file
     }
 
+    // --- changedIn / restoreTo ----------------------------------------------
+
+    @Test
+    fun `changedIn lists what one commit touched, against its parent`() = runBlocking {
+        val dir = project()
+        write(dir, "Login.yaml", "method: GET" + LF)
+        git.init(dir).getOrThrow()
+
+        val kept = write(dir, "Login.yaml", "method: POST" + LF)
+        val added = write(dir, "Refresh.yaml", "method: POST" + LF)
+        val second = git.commit(dir, listOf(kept, added), "Second").getOrThrow()
+
+        val changed = git.changedIn(dir, second.id).getOrThrow()
+
+        assertEquals(
+            setOf("Login.yaml" to ChangeKind.MODIFIED, "Refresh.yaml" to ChangeKind.ADDED),
+            changed.map { it.path.fileName.toString() to it.kind }.toSet(),
+        )
+    }
+
+    @Test
+    fun `changedIn on the root commit reports its files rather than nothing`() = runBlocking {
+        val dir = project()
+        write(dir, "Login.yaml", "method: GET" + LF)
+        git.init(dir).getOrThrow()
+
+        val root = git.log(dir).getOrThrow().single()
+        val changed = git.changedIn(dir, root.id).getOrThrow()
+
+        // Diffed against the empty tree. Against a missing parent it would
+        // report no changes for the one commit where everything changed.
+        assertTrue(
+            changed.any { it.path.fileName.toString() == "Login.yaml" },
+            "the root commit should list the files it introduced, got $changed",
+        )
+        assertTrue(changed.all { it.kind == ChangeKind.ADDED })
+    }
+
+    @Test
+    fun `restoreTo brings back an edited file and stages it`() = runBlocking {
+        val dir = project()
+        val file = write(dir, "Login.yaml", "method: GET" + LF)
+        git.init(dir).getOrThrow()
+        val first = git.log(dir).getOrThrow().single()
+
+        write(dir, "Login.yaml", "method: DELETE" + LF)
+        git.commit(dir, listOf(file), "Break it").getOrThrow()
+
+        val report = git.restoreTo(dir, first.id).getOrThrow()
+
+        assertEquals("method: GET" + LF, Files.readString(file))
+        assertEquals(1, report.restored)
+        // The branch does not move: the undo is content, to be committed.
+        assertEquals(2, git.log(dir).getOrThrow().size)
+    }
+
+    @Test
+    fun `restoreTo removes files added after that commit`() = runBlocking {
+        val dir = project()
+        val first = write(dir, "Login.yaml", "method: GET" + LF)
+        git.init(dir).getOrThrow()
+        val before = git.log(dir).getOrThrow().single()
+
+        val later = write(dir, "Refresh.yaml", "method: POST" + LF)
+        git.commit(dir, listOf(later), "Add refresh").getOrThrow()
+        assertTrue(Files.exists(later))
+
+        git.restoreTo(dir, before.id).getOrThrow()
+
+        // The half a checkout of paths cannot do: restoring only what the old
+        // commit held would leave this sitting there, which is not that point.
+        assertFalse(Files.exists(later), "a file created after the commit should be gone")
+        assertTrue(Files.exists(first))
+    }
+
+    @Test
+    fun `restoring to where you already are changes nothing`() = runBlocking {
+        val dir = project()
+        write(dir, "Login.yaml", "method: GET" + LF)
+        git.init(dir).getOrThrow()
+        val head = git.log(dir).getOrThrow().single()
+
+        val report = git.restoreTo(dir, head.id).getOrThrow()
+
+        assertEquals(0, report.touched)
+        assertTrue(git.state(dir).getOrThrow().clean)
+    }
+
+    @Test
+    fun `restoreTo refuses a commit that is not there`() = runBlocking {
+        val dir = project()
+        write(dir, "Login.yaml", "method: GET" + LF)
+        git.init(dir).getOrThrow()
+
+        assertTrue(git.restoreTo(dir, "0".repeat(40)).isFailure)
+    }
+
+    @Test
+    fun `rebase without a remote fails rather than doing something else`() = runBlocking {
+        val dir = project()
+        write(dir, "Login.yaml", "method: GET" + LF)
+        git.init(dir).getOrThrow()
+
+        // No remote at all — the failure has to arrive as a failure, not as an
+        // "already up to date" that quietly did nothing.
+        assertTrue(git.rebase(dir).isFailure)
+    }
+
     // --- init ---------------------------------------------------------------
 
     @Test

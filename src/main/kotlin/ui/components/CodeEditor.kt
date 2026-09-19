@@ -4,8 +4,13 @@ import org.bittrace.ui.P
 import org.bittrace.ui.Typo
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -18,17 +23,37 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.monkopedia.kodemirror.basicsetup.basicSetup
 import com.monkopedia.kodemirror.basicsetup.minimalSetup
+import com.monkopedia.kodemirror.commands.defaultKeymap
+import com.monkopedia.kodemirror.language.bracketMatching
+import com.monkopedia.kodemirror.language.defaultHighlightStyle
+import com.monkopedia.kodemirror.language.foldGutter
+import com.monkopedia.kodemirror.language.foldKeymap
+import com.monkopedia.kodemirror.language.syntaxHighlighting
+import com.monkopedia.kodemirror.search.highlightSelectionMatches
+import com.monkopedia.kodemirror.search.searchKeymap
 import com.monkopedia.kodemirror.state.Compartment
+import com.monkopedia.kodemirror.state.Extension
 import com.monkopedia.kodemirror.state.TransactionSpec
+import com.monkopedia.kodemirror.state.allowMultipleSelections
 import com.monkopedia.kodemirror.state.extensionListOf
 import com.monkopedia.kodemirror.state.readOnly
+import com.monkopedia.kodemirror.view.EditorSession
 import com.monkopedia.kodemirror.view.KodeMirror
+import com.monkopedia.kodemirror.view.crosshairCursor
+import com.monkopedia.kodemirror.view.drawSelection
 import com.monkopedia.kodemirror.view.editable
+import com.monkopedia.kodemirror.view.highlightActiveLine
+import com.monkopedia.kodemirror.view.highlightActiveLineGutter
+import com.monkopedia.kodemirror.view.highlightSpecialChars
+import com.monkopedia.kodemirror.view.keymapOf
+import com.monkopedia.kodemirror.view.lineNumbers
 import com.monkopedia.kodemirror.view.onChange
 import com.monkopedia.kodemirror.view.placeholder
+import com.monkopedia.kodemirror.view.rectangularSelection
 import com.monkopedia.kodemirror.view.rememberEditorSession
 import com.monkopedia.kodemirror.view.scrollPastEnd
 import com.monkopedia.kodemirror.view.setDoc
+import com.monkopedia.kodemirror.view.tabRendering
 import org.bittrace.ui.components.editor.editorAppearance
 import org.bittrace.ui.components.editor.languageFor
 
@@ -73,7 +98,10 @@ fun CodeEditor(
             // nulls and three of these are conditional.
             extensions = extensionListOf(
                 *listOfNotNull(
-                    basicSetup,
+                    // Past the limit this is a viewer, so it gets the viewer's
+                    // bundle. `editableText` is already in the `key` above, so
+                    // crossing the limit rebuilds the session either way.
+                    if (editableText) basicSetup else readOnlySetup,
                     appearance,
                     language.extension,
                     // Room below the last line, so a short document still has an
@@ -101,8 +129,7 @@ fun CodeEditor(
             if (session.state.doc.toString() != value) session.setDoc(value)
         }
 
-        Box(modifier.background(P.input)) {
-            KodeMirror(session = session, modifier = Modifier.fillMaxSize())
+        ScrolledEditor(session, value, modifier) {
             if (!editableText) {
                 Box(
                     Modifier.align(Alignment.TopEnd).padding(10.dp)
@@ -161,7 +188,7 @@ fun CodeView(
             doc = value,
             extensions = extensionListOf(
                 *listOfNotNull(
-                    if (plain) minimalSetup else basicSetup,
+                    if (plain) minimalSetup else readOnlySetup,
                     appearance,
                     languageSlot.of(language.extension),
                     readOnly.of(true),
@@ -191,11 +218,146 @@ fun CodeView(
         LaunchedEffect(value) {
             if (session.state.doc.toString() != value) session.setDoc(value)
         }
-        Box(modifier.background(P.input)) {
-            KodeMirror(session = session, modifier = Modifier.fillMaxSize())
-        }
+        ScrolledEditor(session, value, modifier)
     }
 }
+
+/**
+ * The editor under a scroll container of ours, so it can carry a scrollbar.
+ *
+ * KodeMirror scrolls vertically through a `LazyColumn` it keeps to itself: the
+ * state never leaves the composable, `HorizontalScrollbar` is private to that
+ * file, and neither `EditorTheme` nor `ViewUpdate` offers anywhere to hang a
+ * vertical one. The only way to put a scrollbar beside the editor is to be the
+ * thing that scrolls it.
+ *
+ * Handing the editor an unbounded height is what the library calls its height
+ * contract, and it is supported — `boundUnconstrainedHeight` swaps the infinite
+ * constraint for the document's natural height rather than collapsing or
+ * throwing. But it means exactly what it says: **the whole document is laid
+ * out**, so the line list no longer virtualizes and a large body costs what a
+ * large body costs. That is the trade this makes, deliberately.
+ *
+ * It also takes the editor's caret reveal with it — under an unbounded height
+ * there is nothing for the editor to scroll, so scroll-into-view has nothing to
+ * act on and the surrounding container governs what is visible.
+ */
+@Composable
+private fun ScrolledEditor(
+    session: EditorSession,
+    value: String,
+    modifier: Modifier = Modifier,
+    overlay: @Composable BoxScope.() -> Unit = {},
+) {
+    val scrollable = remember(value) { withinScrollbarLimit(value) }
+    Box(modifier.background(P.input)) {
+        if (scrollable) {
+            val vertical = rememberScrollState()
+            Box(Modifier.fillMaxSize().verticalScroll(vertical)) {
+                // `fillMaxWidth`, not `fillMaxSize`: the width is the pane's,
+                // but the height has to be the document's. Asking for the
+                // parent's height inside a scrolling container is asking for
+                // infinity.
+                KodeMirror(session = session, modifier = Modifier.fillMaxWidth())
+            }
+            // Draws nothing while the document fits, like every other scrollbar
+            // in the app, so a short body is not given a rail to look at.
+            VScrollbar(vertical, Modifier.align(Alignment.CenterEnd).fillMaxHeight())
+        } else {
+            // Past the limit the editor keeps its own scrolling, and there is
+            // no scrollbar to show — see [SCROLLBAR_LINE_LIMIT].
+            KodeMirror(session = session, modifier = Modifier.fillMaxSize())
+        }
+        overlay()
+    }
+}
+
+/**
+ * How long a document may be before it keeps the editor's own scrolling.
+ *
+ * Laying a whole document out is not merely slower than virtualizing it, it
+ * stops working, and it stops working twice over. Rendering the editor under an
+ * unbounded height at a 700px width:
+ *
+ * ```
+ *   2,000 … 10,000 lines   ok
+ *          11,000 lines    OutOfMemoryError
+ *          40,000 lines    IllegalArgumentException: Can't represent a width
+ *                          of 700 and height of 840029 in Constraints
+ * ```
+ *
+ * The second is a hard ceiling — `Constraints` packs both axes into a `Long`,
+ * so a tall enough document cannot be measured at any heap size. The first
+ * arrives well before it and is the one that decides this number: a capture
+ * tool is holding traffic in the same heap, and spending it on the lines of a
+ * body nobody is reading is the wrong trade.
+ *
+ * 2,000 is a comfortable multiple below where it broke, and covers the bodies
+ * this is for — a pretty-printed API response runs to tens or hundreds of
+ * lines. Past it the editor virtualizes as before and the scrollbar is the
+ * thing given up, which is the right way round: the alternative is a scrollbar
+ * on a pane that crashes.
+ */
+private const val SCROLLBAR_LINE_LIMIT = 2_000
+
+/**
+ * Whether [text] is short enough for [SCROLLBAR_LINE_LIMIT].
+ *
+ * Stops at the first line past the limit rather than counting them all, so
+ * asking the question about a ten-megabyte body costs the same as asking it
+ * about a small one.
+ */
+private fun withinScrollbarLimit(text: String): Boolean {
+    var lines = 1
+    for (c in text) {
+        if (c == '\n' && ++lines > SCROLLBAR_LINE_LIMIT) return false
+    }
+    return true
+}
+
+/**
+ * [basicSetup] with the parts that only an editable document can use removed.
+ *
+ * Everything this app shows a *captured* body through is read-only — the
+ * inspector's panes, an API response, and any body past [EDITABLE_LIMIT] — and
+ * `basicSetup` is the editing bundle. Installing it behind `readOnly` still
+ * builds every state field and view plugin in it; they simply never fire.
+ *
+ * What goes, and why it cannot matter here:
+ *
+ *  - `history()` — undo/redo over a document that takes no edits. It is also
+ *    the one with a footprint: an undo history exists to retain changesets.
+ *  - `autocompletion()` and its keymap — a completion popup whose result has
+ *    nowhere to be inserted.
+ *  - `closeBrackets()` and its keymap, `indentOnInput` — reactions to typing.
+ *  - `dropCursor` — where a drag would insert.
+ *  - `lintKeymap` — this app registers no linter, so the bindings address a
+ *    diagnostic set that is always empty.
+ *
+ * What stays is everything that makes a body *readable*: the gutter, folding,
+ * bracket matching, selection and its match highlighting, the active line, and
+ * the search keymap. Search stays lazy — `Mod-F` appends the search extension
+ * on first use — so the panel costs nothing until somebody looks for something.
+ *
+ * Not [minimalSetup] plus additions: that bundle drops the gutter and folding,
+ * which is a deliberately different view (see [CodeView]'s `plain`).
+ */
+private val readOnlySetup: Extension = extensionListOf(
+    lineNumbers,
+    highlightActiveLineGutter,
+    highlightSpecialChars,
+    tabRendering,
+    foldGutter(),
+    drawSelection,
+    allowMultipleSelections.of(true),
+    syntaxHighlighting(defaultHighlightStyle, fallback = true),
+    bracketMatching(),
+    rectangularSelection,
+    crosshairCursor,
+    highlightActiveLine,
+    highlightSelectionMatches(),
+    keymapOf(defaultKeymap + searchKeymap + foldKeymap),
+)
 
 /**
  * Beyond this the editor stops accepting input.

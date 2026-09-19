@@ -41,6 +41,16 @@ fun KvEditor(
     modifier: Modifier = Modifier,
     nameHint: String = "name",
     valueHint: String = "value",
+    /**
+     * Whether rows carry a third column for what they are for.
+     *
+     * Off by default, and on only for a project's variables. A header's name is
+     * already its documentation; a variable's is a word that turns up inside a
+     * URL three files away, and the note saying what it holds has nowhere else
+     * to live.
+     */
+    descriptions: Boolean = false,
+    descriptionHint: String = "what it is for",
     onChange: (List<KeyValue>) -> Unit,
 ) {
     // P.input rather than P.bg: the request builder is a form, and a light theme
@@ -54,7 +64,17 @@ fun KvEditor(
             Spacer(Modifier.width(ENABLE_WIDTH + 8.dp))
             PzText("Name", color = P.dim, style = Typo.label, family = P.Ui, modifier = Modifier.width(NAME_WIDTH))
             Spacer(Modifier.width(8.dp))
-            PzText("Value", color = P.dim, style = Typo.label, family = P.Ui)
+            PzText("Value", color = P.dim, style = Typo.label, family = P.Ui, modifier = Modifier.weight(1f))
+            if (descriptions) {
+                Spacer(Modifier.width(8.dp))
+                PzText(
+                    "Description",
+                    color = P.dim, style = Typo.label, family = P.Ui,
+                    modifier = Modifier.weight(1f),
+                )
+            }
+            // The remove button's column, so a heading never sits over it.
+            Spacer(Modifier.width(REMOVE_WIDTH))
         }
 
         // Every row plus one blank, from a single loop.
@@ -77,6 +97,8 @@ fun KvEditor(
                 row = rows.getOrElse(index) { KeyValue() },
                 nameHint = nameHint,
                 valueHint = valueHint,
+                descriptions = descriptions,
+                descriptionHint = descriptionHint,
                 placeholder = blank,
                 onChange = { updated -> kvEdited(rows, index, updated)?.let(onChange) },
                 onRemove = { if (!blank) onChange(kvRemoved(rows, index)) },
@@ -90,6 +112,8 @@ private fun KvRowEditor(
     row: KeyValue,
     nameHint: String,
     valueHint: String,
+    descriptions: Boolean,
+    descriptionHint: String,
     placeholder: Boolean = false,
     onChange: (KeyValue) -> Unit,
     onRemove: () -> Unit,
@@ -129,7 +153,20 @@ private fun KvRowEditor(
             bordered = false,
             modifier = Modifier.weight(1f),
         )
-        Box(Modifier.width(18.dp), contentAlignment = Alignment.Center) {
+        if (descriptions) {
+            Spacer(Modifier.width(8.dp))
+            // Equal weight with the value rather than a fixed column: both hold
+            // free text of no predictable length, and splitting what the name
+            // leaves is the only division that does not favour one guess.
+            TextInput(
+                value = row.description,
+                onValueChange = { onChange(row.copy(description = it)) },
+                placeholder = if (placeholder) descriptionHint else "",
+                bordered = false,
+                modifier = Modifier.weight(1f),
+            )
+        }
+        Box(Modifier.width(REMOVE_WIDTH), contentAlignment = Alignment.Center) {
             // The blank trailing row has nothing to remove yet.
             if (!placeholder) {
                 IconActionButton(
@@ -152,6 +189,9 @@ private val ROW_HEIGHT = 30.dp
 /** Matches the inspector's key column, so tables line up across the app. */
 private val NAME_WIDTH = 180.dp
 
+/** The remove button's column, shared with the header's trailing gap. */
+private val REMOVE_WIDTH = 18.dp
+
 /**
  * The enable column. Sized to the checkbox's own 24dp target rather than to the
  * glyph, so nothing clips it — and shared with the header, whose leading gap is
@@ -171,7 +211,12 @@ private val ENABLE_WIDTH = 24.dp
  */
 internal fun kvEdited(rows: List<KeyValue>, index: Int, updated: KeyValue): List<KeyValue>? = when {
     index in rows.indices -> rows.toMutableList().also { it[index] = updated }
-    updated.name.isEmpty() && updated.value.isEmpty() -> null
+    // The description counts as content, or typing one into the blank row would
+    // be thrown away: the row would stay unreal, so the *next* edit would be
+    // built from a fresh `KeyValue()` and the note would vanish as the name
+    // arrived. That is the same class of bug as the per-keystroke append this
+    // function's own comment records.
+    updated.name.isEmpty() && updated.value.isEmpty() && updated.description.isEmpty() -> null
     else -> rows + updated
 }
 

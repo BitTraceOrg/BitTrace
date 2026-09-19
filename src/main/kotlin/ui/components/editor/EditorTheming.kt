@@ -3,6 +3,7 @@ package org.bittrace.ui.components.editor
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.dp
+import com.monkopedia.kodemirror.lang.css.css
 import com.monkopedia.kodemirror.lang.html.html
 import com.monkopedia.kodemirror.lang.javascript.javascript
 import com.monkopedia.kodemirror.lang.json.json
@@ -139,6 +140,7 @@ fun languageFor(contentType: String): LanguageSupport {
         type.contains("json") -> Lang.JSON
         type.contains("html") -> Lang.HTML
         type.contains("xml") -> Lang.XML
+        type.contains("css") -> Lang.CSS
         type.contains("typescript") -> Lang.TYPESCRIPT
         type.contains("javascript") || type.contains("ecmascript") -> Lang.JAVASCRIPT
         else -> Lang.PLAIN
@@ -146,7 +148,7 @@ fun languageFor(contentType: String): LanguageSupport {
     return languages.computeIfAbsent(kind, ::build)
 }
 
-private enum class Lang { GRAPHQL, JSON, HTML, XML, TYPESCRIPT, JAVASCRIPT, PLAIN }
+private enum class Lang { GRAPHQL, JSON, HTML, XML, CSS, TYPESCRIPT, JAVASCRIPT, PLAIN }
 
 /**
  * One [LanguageSupport] per language, for the life of the process.
@@ -178,6 +180,7 @@ private fun build(kind: Lang): LanguageSupport = when (kind) {
     Lang.JSON -> json()
     Lang.HTML -> html()
     Lang.XML -> xml()
+    Lang.CSS -> css()
     Lang.TYPESCRIPT -> javascript(typescript = true)
     Lang.JAVASCRIPT -> javascript()
     Lang.PLAIN -> plainText()

@@ -68,6 +68,25 @@ a fixed ceiling rather than letting one download size the heap. Either way the
 prefix is kept and the loss is logged, since what reaches the Inspector then
 looks like a whole body.
 
+A WebSocket is the one flow that is not finished when its response is. It
+begins as an ordinary one — `GET` with `Upgrade: websocket`, answered `101` —
+and that handshake arrives through the usual four frames, so it is already a
+row. The messages that follow are not HTTP: they travel outside any body and so
+appear on no `Complete*` frame, arriving instead on their own pair of tags and
+sharing the handshake's id. `SessionStore` appends each one to
+`TrafficRow.webSocketMessages`, and the Inspector grows a **Messages** tab for
+the row, which is the only view of them there is — a WebSocket's Body tab is
+empty by definition.
+
+Two things differ from a streamed body, and they are easy to get backwards.
+The payloads arrive **already decoded** — mitmproxy undoes `permessage-deflate`
+before the hook runs — so unlike streamed body chunks there is nothing to
+inflate. And the transcript is bounded *here* rather than in `BodyCache`,
+because a socket has no end to wait for: a feed that pushes all afternoon would
+otherwise grow one row without limit. Past the cap the oldest messages go and
+`webSocketEvicted` counts them, beside the sidecar's own `dropped` — a
+transcript that quietly became a tail would read as the whole conversation.
+
 Every frame above is a reaction to traffic, so silence on the stream means
 nothing on its own — an idle proxy and a dead one look identical. The `Status`
 frame is the exception: the sidecar sends one at startup, one once it has bound
@@ -128,7 +147,7 @@ The four screens match the four rail entries:
 | --- | --- | --- |
 | `layouts/home/` | `Home` | — |
 | `layouts/inspector/` | `TrafficView`, and the `Inspector` the Forge also reuses | `FlowTable`, `OverviewBand`, `Waterfall`, `FlowPhases`, `FlowQuery`, `FlowExport`, `BodyScan` |
-| `layouts/forge/` | `ApiView` | `Tree`, `AuthTab`, `RequestSettingsTab`, `RequestHistoryTab`, `VariablesPane`, `ProjectToolbar`, `KvEditor`, `MethodPicker`, `GitDialogs`, `GitMenu`, `UnsavedChangesDialog` |
+| `layouts/forge/` | `ApiView` | `Tree`, `ProjectPane`, `AuthTab`, `RequestSettingsTab`, `RequestHistoryTab`, `KvEditor`, `MethodPicker`, `GitDialogs`, `GitMenu`, `UnsavedChangesDialog` |
 | `layouts/settings/` | `SettingsView` | — |
 
 `Inspector` is the one component a layout owns that another layout imports: the
@@ -265,7 +284,27 @@ kinds onto the active palette, so highlighting recolours with the theme. The
 same lexers drive the request body editor through a `VisualTransformation`,
 which is why a JSON body looks the same while you type it and after it is sent.
 
-Formatters are called off the UI thread and must be stateless.
+Formatters are called off the UI thread and must be stateless. The bundled set
+is Raw, Hex, JSON, XML, HTML, CSS, JS, TS and GraphQL; all but Raw and Hex are
+`indentCode` over a `CodeStyle` plus a lexer. CSS's style is the one that had to
+differ — it declares no line comment, because `//` is a syntax error in CSS
+rather than a comment, and treating it as one would hide the rest of a line the
+browser rejected. Its lexer is positional for the same reason: `color` and `red`
+are both ordinary words, and only the colon tells them apart. It tracks a *stack*
+of block kinds, not a flag, because an at-rule block holds rules where a rule
+block holds declarations — with one boolean, everything inside a media query
+came out coloured as a property.
+
+**An image body is a chip, not a takeover.** When the mime is a decodable
+image, the picker gains an **Image** entry, first and selected by default, and
+the Body tab draws the picture — decoded off the UI thread, scaled with
+`ContentScale.Inside` so a favicon stays a favicon. It is a chip rather than a
+formatter because a formatter returns text and the whole point of this one is
+that it does not; its id is shaped like a formatter's and matches none, so every
+lookup falls through to the normal default on a flow that is not an image. Raw
+and Hex still show the bytes, which is what they are for. SVG stays text: Skia
+has no SVG decoder behind `makeFromEncoded`, and an SVG is XML the code view
+already renders.
 
 ### Tools
 
@@ -507,7 +546,8 @@ returns `Result`, with JGit's exceptions translated into a sealed `GitFailure`
 so the UI branches on a type instead of matching a message.
 
 **Project variables.** Each project holds a `.bittrace-variables.yaml` — a
-key/value table shown as a **Variables** row under it — and `{{name}}` in a URL,
+key/value table, edited on the project tab's **Variables** section — and
+`{{name}}` in a URL,
 a param, a header, a cookie, a body or an auth field is replaced on the way out
 (`api/Variables.kt`). Substitution happens at send time and is **never written
 back**: the saved request keeps the `{{name}}` form, which is what makes it
@@ -548,13 +588,26 @@ the pre-project layout, and `adoptLegacyLayout` would sweep every project into a
 folder called "My project".
 
 **A tab is a sum type.** `EditorTab` is either a `RequestTab` or a
-`VariablesTab`, rather than one class with a mode flag. The difference is not
-stylistic: with a flag, a variables tab carries a placeholder `ApiRequest` and a
+`ProjectTab`, rather than one class with a mode flag. The difference is not
+stylistic: with a flag, a project tab carries a placeholder `ApiRequest` and a
 path, so `CollectionStore.save(path, request)` is *writable* — and `saveAll`
 reaches it with no compile error, putting a six-line YAML file where a project
 folder was. Split, that call cannot be expressed. `CollectionStore.save` also
 now refuses any path that is not at a request's depth, so the same mistake from
 any other caller is a failed `Result` rather than a lost file.
+
+**The project tab.** Double-clicking a project opens one: a heading, then
+Overview / Variables / Git. Overview is a readout — location, branch, counts of
+variables, requests and collections. Variables is the table above. Git is the
+panel below. The selected section lives on `ProjectTab`, so leaving the tab and
+returning does not reset it, and `dirty` covers the variables table alone, which
+is what keeps the checkout guard and `saveAll` working off `EditorTab.dirty`.
+
+Variable rows carry a **description** column, and only there: `KeyValue` is the
+same row type headers and params are made of, so the field is annotated
+`@EncodeDefault(NEVER)` — `appYaml` sets `encodeDefaults = true`, and without it
+adding the field would have appended `description: ""` to every header and param
+line in every saved request the next time it was touched. A test pins that.
 
 Several things in `GitService` are there to stop a failure that does not throw:Several things in `GitService` are there to stop a failure that does not throw:
 
@@ -586,15 +639,36 @@ git operation whether or not it succeeded, on API-view entry, and on window
 focus. That last one is the only trigger that catches a change BitTrace did not
 make, which in practice means `git pull` in a terminal.
 
-**The branch is a combo box on the project row**, not a chip that opens a
-picker: choosing from a list is what the control does, so it looks and behaves
-like the app's other list pickers rather than a label that turns out to be a
-button that turns out to open a dialog. Its options therefore have to exist
-before it is clicked, which is why `GitState` carries the branch names — one
-extra ref walk inside a repository the status read already has open, against a
-second round trip. Remote-tracking branches appear only where no local branch
-of that name exists: the two are the same branch, and offering both would make
-picking one a coin toss with different consequences.
+**Git lives in the project tab, and only there.** The tree once carried a
+branch combo box on each project row and every git verb in its context menu;
+both are gone. A project row now shows one thing about git — a branch glyph,
+green once there is a remote and grey while the project is local-only — and the
+tree takes a `(Node) -> Color?` predicate for it, so it still knows nothing
+about repositories.
+
+The panel is two columns. The left holds the branch picker, Fetch / Pull / Push,
+the commit box and the changed files, with **Publish to remote** above the lot
+while there is no remote — the one state where the glyph is grey, the picker is
+useless and Commit-and-Push is dead, so the fix has to be where the problem is
+shown. The right is the log: clicking a commit opens its files beside it
+(`GitService.changedIn`, diffed against the parent, or against the empty tree
+for the root commit), and each row can **restore** to that point.
+
+The branch picker also appears in the status bar's breadcrumb, which is where
+`ForgeGitCommands` comes from: the switch has to be the *same* guarded one the
+panel runs, but the dialogs it needs live inside `ApiView` and the status bar is
+a sibling of it. `ApiView` fills the holder in and the bar calls through it —
+plain lambdas, because nothing reads them during composition. `ForgeSelection`
+is its mirror for state rather than commands, and is snapshot-backed for exactly
+that reason: the app menu greys out New request and Import request until a
+collection is selected, and has to re-enable on the click that selects one.
+
+Because the picker's options have to exist before it is clicked, `GitState`
+carries the branch names — one extra ref walk inside a repository the status
+read already has open, against a second round trip. Remote-tracking branches
+appear only where no local branch of that name exists: the two are the same
+branch, and offering both would make picking one a coin toss with different
+consequences.
 
 **Checkout and pull are blocked while a tab is dirty.** They rewrite files under
 open editors, and reloading afterwards would discard the edits silently. The
@@ -603,6 +677,18 @@ simply wait. Afterwards `ApiClientState.reconcile` puts tabs back in step:
 unchanged files are left alone so a no-op checkout does not recompose the
 editor, and a request that does not exist on the new branch keeps its content,
 loses its path and becomes an unsaved draft rather than being closed.
+
+**Restore and re-sync go through the same guard**, because they rewrite the
+working tree the same way. `restoreTo` is deliberately not a reset: it brings
+the tree back to a commit's content *staged*, leaving the branch and the history
+where they are, so undoing three commits is itself a commit you write and can
+undo in turn — the alternative is unrecoverable from inside this app, and a
+button in a list is the wrong place to offer it. It is two halves, and the
+second is the one that is easy to miss: a checkout of paths only writes files
+the source tree has, so files created since are separately removed. `rebase`
+fetches and replays, and a conflict is **left standing** rather than aborted —
+the repository is then in a state git's own tools can finish, and the message
+says so, because BitTrace has no merge UI and cannot.
 
 **Publishing** a project that has no remote asks for a URL, adds it as `origin`,
 pushes and records the tracking config — and rolls the remote back if the push

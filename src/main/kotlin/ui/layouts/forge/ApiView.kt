@@ -6,20 +6,25 @@ import org.bittrace.ui.layouts.forge.components.AuthTab
 import org.bittrace.ui.layouts.forge.components.CollectionTree
 import org.bittrace.ui.layouts.forge.components.CommitDialog
 import org.bittrace.ui.layouts.forge.components.GitPrompts
+import org.bittrace.ui.layouts.forge.components.ForgeGitCommands
+import org.bittrace.ui.layouts.forge.components.ForgeSelection
 import org.bittrace.ui.layouts.forge.components.KvEditor
 import org.bittrace.ui.layouts.forge.components.MethodPicker
 import org.bittrace.ui.layouts.forge.components.NewBranchDialog
 import org.bittrace.ui.layouts.forge.components.PendingChangesDialog
 import org.bittrace.ui.layouts.forge.components.PendingGit
-import org.bittrace.ui.layouts.forge.components.ProjectToolbar
 import org.bittrace.ui.layouts.forge.components.PublishDialog
 import org.bittrace.ui.layouts.forge.components.RequestHistoryTab
 import org.bittrace.ui.layouts.forge.components.RequestSettingsTab
-import org.bittrace.ui.layouts.forge.components.TreeBadge
 import org.bittrace.ui.layouts.forge.components.TreeMenuItem
 import org.bittrace.ui.layouts.forge.components.UnsavedChangesDialog
-import org.bittrace.ui.layouts.forge.components.VariablesPane
-import org.bittrace.ui.layouts.forge.components.gitItems
+import org.bittrace.ui.layouts.forge.components.ProjectPane
+import org.bittrace.ui.layouts.forge.components.ProjectGitActions
+import org.bittrace.ui.layouts.forge.components.branchTint
+import org.bittrace.ui.layouts.forge.components.runFetch
+import org.bittrace.ui.layouts.forge.components.runPull
+import org.bittrace.ui.layouts.forge.components.runPush
+import org.bittrace.ui.layouts.forge.components.runResync
 import org.bittrace.ui.layouts.forge.components.methodColor
 import org.bittrace.ui.layouts.inspector.Inspector
 import org.bittrace.api.walk
@@ -48,6 +53,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -77,7 +84,8 @@ import org.bittrace.api.ApiClientState
 import org.bittrace.api.RequestTab
 import org.bittrace.api.ProjectVariables
 import org.bittrace.api.VariablesNode
-import org.bittrace.api.VariablesTab
+import org.bittrace.api.ProjectTab
+import org.bittrace.api.ProjectSection
 import org.bittrace.api.EditorTab
 import org.bittrace.api.CollectionStore
 import org.bittrace.api.oauth.OAuthService
@@ -91,6 +99,7 @@ import org.bittrace.api.resolve
 import org.bittrace.api.urlWithParams
 import org.bittrace.data.SessionStore
 import org.bittrace.git.GitStore
+import org.bittrace.git.CommitEntry
 import org.bittrace.data.horizontalLayout
 import org.bittrace.data.SettingsStore
 import org.bittrace.plugin.format.BodyFormatter
@@ -117,6 +126,7 @@ import org.bittrace.ui.rightBorder
 import org.bittrace.ui.topBorder
 import org.jetbrains.jewel.foundation.theme.JewelTheme
 import org.jetbrains.jewel.ui.component.IconActionButton
+import org.jetbrains.jewel.ui.component.OutlinedSplitButton
 import org.jetbrains.jewel.ui.component.TabData
 import org.jetbrains.jewel.ui.component.TabStrip
 import org.jetbrains.jewel.ui.icons.AllIconsKeys
@@ -145,6 +155,21 @@ fun ApiView(
     collectionActions: List<CollectionActionPlugin>,
     /** Owner for the file picker; the API menu and rail both route through App. */
     window: ComposeWindow,
+    /**
+     * Filled in here, called from the status bar's branch menu.
+     *
+     * The switch has to be this one — guarded, then reconciled — and the
+     * dialogs both operations need are composed below, so the view publishes
+     * them rather than the bar reimplementing them.
+     */
+    commands: ForgeGitCommands = ForgeGitCommands(),
+    /**
+     * Published for the app menu, which greys out what needs a collection.
+     *
+     * The tree's selection is this view's own state, and the menu bar is built
+     * outside it — so rather than the menu guessing, the view says.
+     */
+    selection: ForgeSelection = ForgeSelection(),
     /**
      * Where the notice strip's messages also go.
      *
@@ -251,42 +276,6 @@ fun ApiView(
         }
     }
 
-    /**
-     * The selected node, for the toolbar.
-     *
-     * Variables rows are excluded on purpose. The toolbar enables Delete for
-     * anything non-null, and a variables file is not the user's to delete —
-     * it is regenerated the moment the project is read again. Reporting the row
-     * as "nothing selected" is what the toolbar already did before the walk was
-     * shared, when it reached variables by not looking for them.
-     */
-    val selectedNode = remember(collections.tree, selectedPath) {
-        selectedPath?.let { path ->
-            collections.tree.walk().firstOrNull { it.path == path && it !is VariablesNode }
-        }
-    }
-
-    /**
-     * Makes whatever belongs one level under [node].
-     *
-     * The same rule the context menu follows, so the toolbar button and the
-     * menu entry cannot disagree about what "new" means where you are standing.
-     */
-    fun createUnder(node: Node?) {
-        viewScope.launch {
-            val made = withContext(Dispatchers.IO) {
-                when (node) {
-                    is ProjectNode -> collections.createNamedCollection(node.path)
-                    is CollectionNode -> collections.createNamedRequest(node.path)
-                    is RequestNode -> node.path.parent?.let { collections.createNamedRequest(it) }
-                    else -> collections.createNamedProject()
-                }
-            }
-            made?.onSuccess { path -> selectedPath = path; report("Created ${path.fileName}", "info") }
-                ?.onFailure { report("Could not create that: ${it.message}") }
-        }
-    }
-
     fun deleteNode(node: Node) {
         collections.delete(node)
             .onSuccess {
@@ -303,6 +292,45 @@ fun ApiView(
             git.run(project, "Checkout") { checkout(project, branch).map { "Switched to ${it.branch}." } }
             reconcile(project, branch.substringAfter("origin/", branch))
         }
+    }
+
+    /**
+     * Puts the tree back to [commit], guarded and then reconciled.
+     *
+     * The same shape as [switchTo] and for the same reason: it rewrites files
+     * under the open tabs, so unsaved work stops it first and what is on screen
+     * is re-read from disk after. The branch does not move — the restored
+     * content lands staged, for you to commit — so the tabs are reconciled
+     * against the branch they were already on.
+     */
+    fun restoreTo(project: Path, commit: CommitEntry) {
+        guarded(project, "Restoring") {
+            git.run(project, "Restore") {
+                restoreTo(project, commit.id).map { report ->
+                    if (report.touched == 0) {
+                        "Already at ${commit.short}."
+                    } else {
+                        "Restored ${report.touched} file(s) to ${commit.short}. Staged, not committed."
+                    }
+                }
+            }
+            reconcile(project, git.stateOf(project).branch.orEmpty())
+        }
+    }
+
+    // Kept in step with the tree, and cleared on the way out so a menu entry
+    // cannot stay enabled on the strength of a selection that went away with
+    // the view.
+    DisposableEffect(Unit) {
+        onDispose { selection.collection = null }
+    }
+    SideEffect { selection.collection = collections.collectionFor(selectedPath) }
+
+    // After composition, and every time, so the lambdas close over this frame's
+    // `switchTo` rather than the first one's.
+    SideEffect {
+        commands.switchBranch = ::switchTo
+        commands.newBranch = { project -> branchFor = project }
     }
 
     val prompts = remember(state, collections) {
@@ -345,15 +373,6 @@ fun ApiView(
                         }
                     }
 
-                    ProjectToolbar(
-                        selected = selectedNode,
-                        collections = collections,
-                        git = git,
-                        prompts = prompts,
-                        onNew = { node -> createUnder(node) },
-                        onDelete = { node -> deleteNode(node) },
-                    )
-
                     CollectionTree(
                         nodes = collections.tree,
                         selected = selectedPath,
@@ -363,29 +382,23 @@ fun ApiView(
                                 .onSuccess { state.open(it, node.path); selectedPath = node.path; notice = null }
                                 .onFailure { report("Could not read ${node.name}: ${it.message}") }
                         },
-                        onOpenVariables = { node ->
-                            collections.projectOf(node.path)?.let { project ->
-                                state.openVariables(project)
-                                selectedPath = node.path
-                                notice = null
-                            }
+                        onOpenProject = { node ->
+                            state.openProject(node.path)
+                            selectedPath = node.path
+                            notice = null
                         },
                         onSelectFolder = { selectedPath = it.path },
-                        onBadge = { node ->
-                            // Only projects carry one, and only once the repo is known.
-                            (node as? ProjectNode)?.let { project ->
-                                val state = git.stateOf(project.path)
-                                state.label?.let { label ->
-                                    TreeBadge(
-                                        value = label,
-                                        // A detached HEAD has no branch to be selected,
-                                        // so it is a readout until one is created.
-                                        options = if (state.detached) emptyList() else state.branches,
-                                        dot = !state.clean,
-                                        onSelect = { picked -> switchTo(project.path, picked) },
-                                    )
-                                }
-                            }
+                        // Only projects carry one, and only once the repo is
+                        // known — `stateOf` reports no repo until its first read
+                        // lands, so the mark appears with the rest of the git
+                        // state rather than flickering ahead of it. The shade is
+                        // the panel's own rule, so a project reads the same in
+                        // the tree as it does in its tab.
+                        onVersionMark = { node ->
+                            (node as? ProjectNode)
+                                ?.let { git.stateOf(it.path) }
+                                ?.takeIf { it.repo }
+                                ?.let { branchTint(it) }
                         },
                         onMenuItems = { node ->
                             // Before `targetOf`, which has no kind for this and no
@@ -406,8 +419,7 @@ fun ApiView(
                             // The host's own come first, above whatever plugins add.
                             val host = createItems(node, collections, scope, ::report) { made ->
                                 selectedPath = made
-                            } + archiveItems(node, collections, window, scope, ::report) +
-                                gitItems(node, git, prompts)
+                            } + archiveItems(node, collections, window, scope, ::report)
                             host + plugins
                         },
                         onRename = { node, name ->
@@ -475,12 +487,48 @@ fun ApiView(
             // exhaustive over the sealed tab so a third kind fails here rather
             // than silently rendering a request builder over it.
             val open = state.active
-            if (open is VariablesTab) {
-                VariablesPane(open) { report(saveVariables(open)) }
+            if (open is ProjectTab) {
+                val node = collections.tree.firstOrNull { it.path == open.project }
+                ProjectPane(
+                    tab = open,
+                    node = node,
+                    // The store, not a snapshot of its state: the git panel
+                    // reads status and log for itself, and commits through the
+                    // same `run` the menu uses.
+                    git = git,
+                    actions = ProjectGitActions(
+                        // The branch picker moved off the tree row and onto the
+                        // project's own git panel, which is now the only place
+                        // a checkout can be started from.
+                        switchBranch = { picked -> switchTo(open.project, picked) },
+                        newBranch = { prompts.newBranch(open.project) },
+                        publish = { prompts.publish(open.project) },
+                        restoreTo = { commit -> restoreTo(open.project, commit) },
+                        resync = { runResync(open.project, git, prompts) },
+                        // `run` re-reads the repository state when it finishes,
+                        // so the panel, the tree's mark and the status bar all
+                        // fill in behind this without being told to.
+                        initRepo = {
+                            git.run(open.project, "Initialise") {
+                                init(open.project).map { "Initialised a repository in ${open.projectName}." }
+                            }
+                        },
+                        push = {
+                            runPush(
+                                open.project,
+                                git,
+                                setUpstream = git.stateOf(open.project).upstream == null,
+                            )
+                        },
+                        // The same runners the menu items call, not copies.
+                        fetch = { runFetch(open.project, git) },
+                        pull = { runPull(open.project, git, prompts) },
+                    ),
+                ) { report(saveProject(open)) }
                 return@Column
             }
 
-            RequestBar(state, service, collections, selectedPath, ::report)
+            RequestBar(state, service, collections, git, selectedPath, ::report)
 
             // --- request builder ---
             val builder: @Composable (Modifier) -> Unit = { paneModifier ->
@@ -880,11 +928,11 @@ private fun RequestTabs(state: ApiClientState, onClose: (EditorTab) -> Unit) {
                     onClick = { state.focus(tab) },
                     content = { _ ->
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            // The method for a request; the syntax it teaches for
-                            // the variables table, which has no method to show.
+                            // The method for a request; a folder mark for a
+                            // project, which has no method to show.
                             val lead = (tab as? RequestTab)?.request?.method
                             PzText(
-                                lead ?: "{{ }}",
+                                lead ?: "◇",
                                 color = lead?.let(::methodColor) ?: P.key,
                                 style = Typo.micro, family = P.Ui, softWrap = false,
                             )
@@ -905,12 +953,6 @@ private fun RequestTabs(state: ApiClientState, onClose: (EditorTab) -> Unit) {
             },
             style = JewelTheme.editorTabStyle,
             modifier = Modifier.weight(1f, fill = false),
-        )
-        IconActionButton(
-            key = AllIconsKeys.General.Add,
-            contentDescription = "New request",
-            onClick = { state.open(org.bittrace.api.ApiRequest(), null) },
-            modifier = Modifier.padding(horizontal = 6.dp),
         )
     }
 }
@@ -1203,6 +1245,7 @@ private fun RequestBar(
     state: ApiClientState,
     service: ProxyService,
     collections: CollectionStore,
+    git: GitStore,
     selectedPath: Path?,
     onNotice: (String?, String) -> Unit,
 ) {
@@ -1241,11 +1284,65 @@ private fun RequestBar(
 
         // No dirty marker on the button — the request's own tab already carries
         // one, and the button's enabled state says the same thing again.
-        GhostButton("Save", enabled = state.dirty || state.openPath == null) {
-            onNotice(save(state, collections, selectedPath), "error")
+        val ready = state.dirty || state.openPath == null
+        // Where this request lives, or would: a draft has no file yet, so the
+        // tree's selection is what says which project it is about to join.
+        val project = (state.openPath ?: selectedPath)?.let { collections.projectOf(it) }
+        val versioned = project != null && git.stateOf(project).repo
+
+        /** Saves, reports, and hands back the file it wrote. */
+        fun persist(): Path? {
+            val failure = save(state, collections, selectedPath)
+            onNotice(failure, "error")
+            return state.openPath.takeIf { failure == null }
+        }
+
+        if (versioned && project != null) {
+            // Outlined, not filled: Send is the one primary action on this bar,
+            // and a second filled button beside it would make the pair read as
+            // a choice between two equals.
+            OutlinedSplitButton(
+                onClick = {
+                    persist()?.let { path ->
+                        git.run(project, "Commit") {
+                            commit(project, listOf(path), messageFor(state, path))
+                                .map { "Committed ${path.fileName} as ${it.short}." }
+                        }
+                    }
+                },
+                enabled = ready,
+                menuContent = {
+                    selectableItem(selected = false, onClick = { persist() }) {
+                        PzText("Save", color = P.text, style = Typo.label, family = P.Ui)
+                    }
+                },
+            ) {
+                PzText(
+                    "Save and Commit",
+                    color = if (ready) P.text else P.faint,
+                    style = Typo.label, family = P.Ui, softWrap = false, maxLines = 1,
+                )
+            }
+        } else {
+            GhostButton("Save", enabled = ready) { persist() }
         }
     }
 }
+
+/**
+ * The commit message a one-click save writes.
+ *
+ * Generated rather than asked for, which is the whole point of the button: a
+ * dialog here would make "save and commit" two dialogs away from saving. The
+ * request's own name is what identifies it in the tree, so it is what the log
+ * says too — falling back to the file name for a request that has not been
+ * named.
+ *
+ * Anyone wanting to say more than this has the commit box in the project tab,
+ * where the message is the first thing on screen.
+ */
+private fun messageFor(state: ApiClientState, path: Path): String =
+    "Update ${state.request.name.ifBlank { path.fileName.toString() }}"
 
 /** Saves over the open file, or into the selected collection when new. */
 /**
@@ -1259,7 +1356,7 @@ private fun RequestBar(
 private fun saveAll(state: ApiClientState, collections: CollectionStore, project: Path): String? {
     state.dirtyTabsUnder(project).forEach { tab ->
         val failure = when (tab) {
-            is VariablesTab -> saveVariables(tab)
+            is ProjectTab -> saveProject(tab)
             is RequestTab -> {
                 val path = tab.openPath
                     ?: return "${tab.title} has no file yet — save it into a collection first."
@@ -1273,14 +1370,14 @@ private fun saveAll(state: ApiClientState, collections: CollectionStore, project
 }
 
 /**
- * Writes a variables table.
+ * Writes a project's variables table.
  *
  * Deliberately not routed through `CollectionStore.save`, which is shaped for a
  * request and now refuses any path that is not one — a project's variables are
  * a different file with different rules, and pretending otherwise is how a
  * placeholder ends up written over something that matters.
  */
-private fun saveVariables(tab: VariablesTab): String? =
+private fun saveProject(tab: ProjectTab): String? =
     runCatching { ProjectVariables.write(tab.project, tab.rows) }
         .fold({ tab.dirty = false; null }, { it.message ?: "Save failed." })
 

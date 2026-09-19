@@ -12,13 +12,13 @@ plugins {
 }
 
 group = "org.bittrace"
-version = "0.1.4-SNAPSHOT"
+version = "0.1.5-SNAPSHOT"
 
 // The version the *shipped* artifacts carry, which is not `version` above:
 // jpackage rejects a `-SNAPSHOT` suffix, and the MSI upgrade rules need a plain
 // `major.minor.patch`. Declared here so the installer version and the names of
 // the files in `build/dist` cannot drift apart.
-val appVersion = "0.1.4"
+val appVersion = "0.1.5"
 
 // Jewel's standalone artifacts are versioned `<jewel>-<intellij-build>`; the
 // platform icons live in a separate repository on their own build numbers, and
@@ -70,6 +70,7 @@ dependencies {
     implementation("com.monkopedia.kodemirror:lang-xml")
     implementation("com.monkopedia.kodemirror:lang-html")
     implementation("com.monkopedia.kodemirror:lang-javascript")
+    implementation("com.monkopedia.kodemirror:lang-css")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.11.0")
     // Streaming JSON for HAR import/export. jackson-core only (no databind):
     // kotlinx-serialization cannot decode lazily inside an object, and HAR
@@ -264,6 +265,12 @@ compose.desktop {
 
 tasks.test {
     useJUnitPlatform()
+    // `-Dbittrace.ui.dump=<dir>` keeps the frames the UI render tests draw, for
+    // when the question is what something looks like rather than whether it
+    // laid out. Forwarded explicitly: a `-D` on the Gradle command line reaches
+    // the daemon, not the JVM the tests run in.
+    providers.systemProperty("bittrace.ui.dump").orNull
+        ?.let { systemProperty("bittrace.ui.dump", it) }
 }
 
 /**

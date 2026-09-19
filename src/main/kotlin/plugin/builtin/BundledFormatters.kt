@@ -113,6 +113,37 @@ class HtmlFormatter : HighlightedFormatter() {
     }
 }
 
+/**
+ * Re-indented CSS — one declaration per line, one rule per block.
+ *
+ * The same brace-and-semicolon pass the script formatters use, which is all CSS
+ * structure is. The style differs in one way that matters: CSS has no `//`
+ * comment, so treating one as a comment would swallow the rest of a line that
+ * a browser would have rejected — and hiding a syntax error is the opposite of
+ * what this tab is for.
+ */
+class CssFormatter : HighlightedFormatter() {
+    override val id = "bittrace.css"
+    override val name = "CSS"
+    override fun handles(mimeType: String) = mimeType.contains("css", ignoreCase = true)
+
+    override fun format(bytes: ByteArray, mimeType: String): String {
+        val text = textOrNull(bytes)?.trim() ?: return "Body is not text."
+        if (text.isEmpty()) return ""
+        return indentCode(text, STYLE)
+    }
+
+    override fun spansOf(text: String) = highlightCss(text)
+
+    private companion object {
+        val STYLE = CodeStyle(
+            lineComments = emptyList(),
+            blockComments = true,
+            quotes = "\"'",
+        )
+    }
+}
+
 /** Brace-driven re-indent shared by the JavaScript and TypeScript formatters. */
 abstract class ScriptFormatter(
     override val id: String,

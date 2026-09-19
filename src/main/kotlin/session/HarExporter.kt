@@ -273,6 +273,6 @@ class HarExporter(
             ?: value
 
     private companion object {
-        const val APP_VERSION = "0.1.4"
+        const val APP_VERSION = "0.1.5"
     }
 }

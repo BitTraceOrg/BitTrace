@@ -192,11 +192,6 @@ fun Waterfall(
                         drawRect(P.accent, Offset(x - 1, y - 1), Size(bw + 2, laneH + 2), style = Stroke(1f))
                     }
                 }
-                // The playhead is "now", so it only belongs on a window that
-                // reaches the end of the capture.
-                if (windowStart + windowMs >= timeline.totalMs - 1) {
-                    drawRect(P.accent, Offset(w - 2, 0f), Size(2f, this.size.height))
-                }
             }
             // Legend overlay (top-right).
             Row(

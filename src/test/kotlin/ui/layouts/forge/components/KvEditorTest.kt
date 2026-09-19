@@ -55,6 +55,15 @@ class KvEditorTest {
     }
 
     @Test
+    fun `a description typed into the blank row appends it`() {
+        // Otherwise the row stays unreal, the next keystroke is built from a
+        // fresh KeyValue(), and the note is gone the moment a name is typed.
+        val out = kvEdited(rows, rows.size, KeyValue(description = "the tenant"))
+        assertEquals(3, out?.size)
+        assertEquals("the tenant", out?.last()?.description)
+    }
+
+    @Test
     fun `toggling the blank row's checkbox alone does not append`() {
         // The blank row draws no checkbox, but `enabled` defaults true and an
         // otherwise-empty row must stay unappendable whatever the flag says.

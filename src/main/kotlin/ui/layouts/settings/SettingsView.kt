@@ -172,7 +172,12 @@ private fun GitPane(settings: SettingsStore) = Pane(Category.GIT.title) {
 @Composable
 private fun QuipFooter() {
     val quip = remember { Quips.random() }
-    Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp)) {
+    // A rule above it, because it is the one thing on this screen that is not a
+    // setting: without the line it read as a caption belonging to whatever
+    // group happened to end above it.
+    Row(
+        Modifier.fillMaxWidth().topBorder(P.line).padding(horizontal = 14.dp, vertical = 10.dp),
+    ) {
         PzText(quip.first, color = P.faint, style = Typo.caption, family = P.Ui)
         PzText(quip.second, color = P.accent, style = Typo.caption, family = P.Ui)
     }

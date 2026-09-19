@@ -6,6 +6,8 @@ import org.bittrace.data.CompleteResponseMessage
 import org.bittrace.data.ConnectRequestData
 import org.bittrace.data.InitialRequestData
 import org.bittrace.data.InitialResponseData
+import org.bittrace.data.WebSocketEndData
+import org.bittrace.data.WebSocketMessageData
 
 /**
  * A structured log line from the sidecar. The receipt time is stamped by the
@@ -47,6 +49,16 @@ interface ProxyListener {
 
     /** A streamed body ended; the totals say whether all of it arrived. */
     fun onBodyEnd(message: BodyEndMessage) {}
+
+    /**
+     * One WebSocket message on an already-established connection; [payload] is
+     * the message itself, already decoded. Shares the id of the handshake flow
+     * — the `101` that opened it — and belongs to no request or response body.
+     */
+    fun onWebSocketMessage(message: WebSocketMessageData, payload: ByteArray) {}
+
+    /** The WebSocket closed; the totals say how much of it was captured. */
+    fun onWebSocketEnd(message: WebSocketEndData) {}
 
     /** [body] is the raw request body that travelled alongside the metadata. */
     fun onCompleteRequest(message: CompleteRequestMessage, body: ByteArray) {}

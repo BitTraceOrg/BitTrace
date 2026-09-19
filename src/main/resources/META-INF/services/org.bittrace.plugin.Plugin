@@ -5,6 +5,7 @@ org.bittrace.plugin.builtin.HexFormatter
 org.bittrace.plugin.builtin.JsonFormatter
 org.bittrace.plugin.builtin.XmlFormatter
 org.bittrace.plugin.builtin.HtmlFormatter
+org.bittrace.plugin.builtin.CssFormatter
 org.bittrace.plugin.builtin.JsFormatter
 org.bittrace.plugin.builtin.TsFormatter
 org.bittrace.plugin.builtin.GraphQlFormatter

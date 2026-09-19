@@ -49,3 +49,6 @@ bin/
 design/
 # IntelliJ run configurations are per-developer.
 .run/
+/.repowise/**/*
+/.mcp.json
+/.claude/CLAUDE.md

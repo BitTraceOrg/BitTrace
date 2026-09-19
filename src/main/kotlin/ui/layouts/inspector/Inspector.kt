@@ -5,6 +5,7 @@ import org.bittrace.ui.components.isFormBody
 import org.bittrace.ui.components.parseForm
 import org.bittrace.ui.hostPath
 import org.bittrace.ui.layouts.inspector.components.Phase
+import org.bittrace.ui.layouts.inspector.components.WebSocketTranscript
 import org.bittrace.ui.layouts.inspector.components.phasesOf
 import org.bittrace.ui.startStr
 import org.bittrace.ui.statusOf
@@ -16,6 +17,11 @@ import androidx.compose.foundation.ContextMenuRepresentation
 import androidx.compose.foundation.ContextMenuState
 import androidx.compose.foundation.LocalContextMenuRepresentation
 import androidx.compose.foundation.background
+import org.jetbrains.skia.Image as SkiaImage
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.graphics.toComposeImageBitmap
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -106,10 +112,20 @@ fun Inspector(
         )
     }
     val response: @Composable (Modifier) -> Unit = { modifier ->
+        // On a WebSocket, Messages *replaces* Body rather than joining it. A
+        // `101` cannot carry a body — RFC 9112 ends a 1xx response at the blank
+        // line after its headers, and everything after that belongs to the
+        // protocol that was switched to — so Body on one of these rows is
+        // permanently empty, and the messages are the content that took its
+        // place on the wire. They take its place in the strip too, and its
+        // position, so the tab under the pointer is the payload either way.
+        val socket = row?.isWebSocket == true
+        val payloadTab = if (socket) "Messages" else "Body"
         Pane(
             modifier,
             "Response", responseTrailing, BodySide.RESPONSE, row, bodyProvider, formatters,
-            tabs = listOf("Overview", "Raw", "Headers", "Cookies", "Body", "Timing"), default = "Body",
+            tabs = listOf("Overview", "Raw", "Headers", "Cookies", payloadTab, "Timing"),
+            default = payloadTab,
         )
     }
 
@@ -160,7 +176,12 @@ private fun Pane(
     tabs: List<String>,
     default: String,
 ) {
-    var tab by remember { mutableStateOf(default) }
+    var selected by remember { mutableStateOf(default) }
+    // The choice is remembered across flows, but the tabs on offer are not the
+    // same for every flow — a WebSocket has Messages and nothing else does. A
+    // remembered tab this flow does not have falls back rather than showing an
+    // empty pane.
+    val tab = if (selected in tabs) selected else default
     // Sticky formatter choice; cleared when a different flow is selected so the
     // default follows each flow's content type.
     var formatterId by remember(row?.id) { mutableStateOf<String?>(null) }
@@ -174,7 +195,7 @@ private fun Pane(
         modifier = modifier.fillMaxHeight(),
         title = caption,
         trailing = trailing?.let { content -> { content() } },
-        onSelect = { tab = it },
+        onSelect = { selected = it },
     ) {
         if (row == null) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -184,8 +205,11 @@ private fun Pane(
         }
 
         // Fixed pane header (URL/status line + MetaGrid), adapting to the side;
-        // hidden on the BODY tab to give the body maximum height.
-        if (tab != "Body") SideHeader(row, side)
+        // hidden on the payload tab to give the payload maximum height. That is
+        // Messages on a WebSocket, which stands in Body's place there and gets
+        // the height for the same reason — it is a long list, and it carries a
+        // summary line of its own.
+        if (tab != "Body" && tab != "Messages") SideHeader(row, side)
 
         // One chip per available formatter, defaulting to the one that claims
         // this flow's content type (falling back to RAW).
@@ -194,8 +218,24 @@ private fun Pane(
             ?: formatters.firstOrNull { it.handles(mime) }
             ?: formatters.firstOrNull { it.id == "bittrace.raw" }
             ?: formatters.firstOrNull()
-        if (tab == "Body" && formatters.isNotEmpty()) {
-            FormatterChips(formatters, active) { formatterId = it.id }
+        // An image body earns a chip of its own beside the formatters, and is
+        // what the tab opens on: the picture is what you came to see. It is a
+        // chip rather than a formatter because a formatter returns text, and
+        // the whole point of this one is that it does not.
+        //
+        // `formatterId` resets per flow, so "nothing picked yet" reliably means
+        // "just opened this flow" — which is when the image should win.
+        val decodable = isPicture(mime)
+        val showsPicture = decodable && (formatterId == null || formatterId == IMAGE_FORMAT_ID)
+        if (tab == "Body" && (formatters.isNotEmpty() || decodable)) {
+            FormatterChips(
+                formats = buildList {
+                    if (decodable) add(Format(IMAGE_FORMAT_ID, "Image"))
+                    formatters.forEach { add(Format(it.id, it.name)) }
+                },
+                selected = if (showsPicture) IMAGE_FORMAT_ID else active?.id,
+                onSelect = { formatterId = it },
+            )
         }
 
         // The monospace tabs are a code view now, which brings its own gutter,
@@ -207,7 +247,13 @@ private fun Pane(
 
         Column(Modifier.fillMaxSize()) {
             Box(Modifier.weight(1f).fillMaxWidth()) {
-                if (monoTab) {
+                if (tab == "Messages") {
+                    // Outside the scrolling column below on purpose: the
+                    // transcript is a lazy list, and a lazy list inside a
+                    // parent that scrolls the same axis has no height to
+                    // measure against.
+                    WebSocketTranscript(row)
+                } else if (monoTab) {
                     // No SelectionContainer here. A lazy list disposes the rows
                     // you scroll past, so a selection spanning them would copy
                     // only the part still on screen — a partial copy that looks
@@ -222,7 +268,7 @@ private fun Pane(
                     // rebuild it, because a plain view is a different editor
                     // and not a setting on this one.
                     val content = if (tab == "Body") {
-                        bodyContent(row, side, bodyProvider, active, mime)
+                        bodyContent(row, side, bodyProvider, active, mime, showsPicture)
                     } else {
                         rawContent(row, side, bodyProvider)
                     }
@@ -233,6 +279,12 @@ private fun Pane(
                         // exists to make a body readable.
                         is MonoContent.Code ->
                             Mono(content.text, content.contentType, plain = tab == "Raw")
+                        // Only BODY ever produces one: RAW is the tab for
+                        // seeing the bytes as they came, and a picture there
+                        // would be the one place in the app that refused to
+                        // show you what was actually on the wire.
+                        is MonoContent.Picture ->
+                            Picture(content.bytes, content.contentType)
                     }
                 } else {
                     Box(Modifier.fillMaxSize().verticalScroll(vertical)) {
@@ -253,7 +305,7 @@ private fun Pane(
                 }
                 // Only the scrolling column needs one; the code view draws its
                 // own.
-                if (!monoTab) {
+                if (!monoTab && tab != "Messages") {
                     VScrollbar(vertical, Modifier.align(Alignment.CenterEnd).fillMaxHeight())
                 }
             }
@@ -591,9 +643,28 @@ private sealed interface MonoContent {
     /** Text for the code view, with the content type that picks its language. */
     data class Code(val text: String, val contentType: String) : MonoContent
 
+    /**
+     * An image body, to be looked at rather than read.
+     *
+     * Not a data class: it carries the raw bytes, and an array's `equals` is
+     * identity anyway — a generated one would promise a comparison it does not
+     * make.
+     */
+    class Picture(val bytes: ByteArray, val contentType: String) : MonoContent
+
     /** A line in place of the text — no body, not cached, still formatting. */
     data class Note(val text: String) : MonoContent
 }
+
+/**
+ * Whether a body is a picture this can draw.
+ *
+ * SVG is deliberately not one. Skia decodes raster formats from bytes and has
+ * no SVG decoder behind `makeFromEncoded`, and an SVG is XML that the code view
+ * shows perfectly well — so it stays text rather than becoming a broken image.
+ */
+private fun isPicture(mime: String): Boolean =
+    mime.startsWith("image/", ignoreCase = true) && !mime.contains("svg", ignoreCase = true)
 
 @Composable
 private fun bodyContent(
@@ -602,6 +673,8 @@ private fun bodyContent(
     bodyProvider: (String, BodySide) -> ByteArray?,
     formatter: BodyFormatter?,
     mime: String,
+    /** The Image chip is the one selected, so hand back the bytes to draw. */
+    asPicture: Boolean,
 ): MonoContent {
     // Read before anything returns, so this composable is subscribed to it
     // whichever branch it takes: a body arriving now is one whose every other
@@ -615,6 +688,19 @@ private fun bodyContent(
         ?: return MonoContent.Note(
             if (streaming > 0L) "receiving…" else "body not cached for this flow",
         )
+    // Before the formatter, and before any attempt to read the bytes as text:
+    // a PNG decoded as UTF-8 is a screenful of replacement characters, which is
+    // what the other chips are for if that is genuinely what you want to see.
+    if (asPicture) {
+        // Half an image decodes to nothing, so a body still arriving says so
+        // rather than flickering between failures as the chunks land.
+        return if (streaming > 0L) {
+            MonoContent.Note("receiving image…")
+        } else {
+            MonoContent.Picture(bytes, mime)
+        }
+    }
+
     // A body still arriving is shown as it is. Running a formatter over a
     // fragment would reformat the whole of it on every chunk, and fail on the
     // half-written last record anyway — the formatter takes over once the
@@ -657,19 +743,27 @@ private fun formattedBody(
     return formatted
 }
 
-/** The formatter picker shown above the BODY tab — one chip per formatter. */
+/**
+ * The picker above the BODY tab — one chip per formatter, plus Image when the
+ * body is one.
+ *
+ * Takes prepared [Format]s rather than formatters, because not every chip is a
+ * formatter any more: the caller decides what is on offer and reports back the
+ * id that was chosen.
+ */
 @Composable
-private fun FormatterChips(
-    formatters: List<BodyFormatter>,
-    active: BodyFormatter?,
-    onPick: (BodyFormatter) -> Unit,
-) {
-    FormatPicker(
-        formats = formatters.map { Format(it.id, it.name) },
-        selected = active?.id,
-        onSelect = { picked -> formatters.firstOrNull { it.id == picked.id }?.let(onPick) },
-    )
+private fun FormatterChips(formats: List<Format>, selected: String?, onSelect: (String) -> Unit) {
+    FormatPicker(formats = formats, selected = selected, onSelect = { onSelect(it.id) })
 }
+
+/**
+ * The Image chip's id.
+ *
+ * Shaped like a formatter id and deliberately not one — nothing registers it,
+ * so every lookup into `formatters` misses and falls through to the normal
+ * default, which is exactly what should happen on a flow that is not an image.
+ */
+private const val IMAGE_FORMAT_ID = "bittrace.image"
 
 /**
  * The message exactly as it went over the wire: start line, headers, blank
@@ -796,6 +890,50 @@ private fun KvRow(
 @Composable
 private fun Mono(text: String, contentType: String, plain: Boolean = false) {
     CodeView(text, Modifier.fillMaxSize(), contentType, plain = plain)
+}
+
+/**
+ * An image body, drawn.
+ *
+ * Decoded off the UI thread for the reason formatting is: a few megapixels of
+ * PNG is real work, and doing it in composition drops the frame that was
+ * supposed to show the flow you just clicked.
+ *
+ * Scaled with [ContentScale.Inside], so a large screenshot shrinks to fit and a
+ * 16px favicon stays 16px. Blowing a favicon up to fill the pane would say it
+ * was something it is not, and the caption below gives the real size either
+ * way.
+ */
+@Composable
+private fun Picture(bytes: ByteArray, mime: String) {
+    val decoded by produceState<Result<ImageBitmap>?>(null, bytes) {
+        value = withContext(Dispatchers.Default) {
+            runCatching { SkiaImage.makeFromEncoded(bytes).toComposeImageBitmap() }
+        }
+    }
+
+    val result = decoded
+    val image = result?.getOrNull()
+    when {
+        result == null -> Pad("decoding ${bytesStr(bytes.size.toLong())}…")
+        image == null -> Pad("this image could not be decoded (${mime.ifBlank { "unknown type" }})")
+        else -> Column(Modifier.fillMaxSize()) {
+            Box(
+                Modifier.weight(1f).fillMaxWidth().padding(12.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Image(
+                    bitmap = image,
+                    contentDescription = "Response body, as an image",
+                    contentScale = ContentScale.Inside,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
+            // The numbers the picture cannot show: what it really measures, and
+            // what it cost to send.
+            Pad("${image.width} × ${image.height} · $mime · ${bytesStr(bytes.size.toLong())}")
+        }
+    }
 }
 
 @Composable

@@ -4,12 +4,15 @@ import kotlinx.serialization.json.Json
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import org.bittrace.data.CompleteRequestMessage
 import org.bittrace.data.CompleteResponseMessage
 import org.bittrace.data.ConnectRequestData
 import org.bittrace.data.InitialRequestData
 import org.bittrace.data.InitialResponseData
+import org.bittrace.data.WebSocketEndData
+import org.bittrace.data.WebSocketMessageData
 import org.bittrace.data.requestBodySizeOf
 import org.bittrace.data.responseBodySizeOf
 
@@ -61,6 +64,56 @@ class ProtocolDecodeTest {
         assertEquals("8e364c83-91b8-416d-bd40-19d14236b26e", request.clientConnectionId)
         assertEquals(request.id, data.toCompleteRequest().id)
         assertEquals("Host", data.toCompleteRequest().request.headers.first().name)
+    }
+
+    /**
+     * The WebSocket payloads below are the exception to the note above: they
+     * are built from the field list `core/WebSocketSink.py` writes, not from a
+     * capture, because driving a socket through the sidecar is not something
+     * this suite can do. The emitter is the thing to check them against when
+     * one of these ever disagrees with the wire.
+     */
+    @Test
+    fun `a websocket message carries its direction and real length`() {
+        val data = json.decodeFromString<WebSocketMessageData>(
+            """{"id":"1b7d0f04-3a5e-4f5f-9a2d-2c6e2f1d55aa","seq":7,"fromClient":true,"type":"text",
+               "size":4194304,"truncated":true,"timestamp":"2026-09-18T09:14:02.881204+00:00",
+               "injected":false,"dropped":false}"""
+        )
+
+        assertTrue(data.fromClient)
+        assertEquals(7, data.seq)
+        // The payload was cut to the sidecar's limit, but `size` still reports
+        // the whole message — the figure to show, not the segment's length.
+        assertTrue(data.truncated)
+        assertEquals(4_194_304, data.size)
+    }
+
+    /** A socket that died without a close handshake: no code, and aborted. */
+    @Test
+    fun `an abnormal close decodes with no code and reads as aborted`() {
+        val data = json.decodeFromString<WebSocketEndData>(
+            """{"id":"1b7d0f04-3a5e-4f5f-9a2d-2c6e2f1d55aa","closeCode":null,"closeReason":null,
+               "closedByClient":null,"messages":12,"dropped":3,"truncated":1,
+               "bytesFromClient":840,"bytesFromServer":19204,"aborted":true}"""
+        )
+
+        assertNull(data.closeCode)
+        assertTrue(data.aborted)
+        assertEquals(3, data.dropped)
+        assertEquals("—", data.closeSummary)
+    }
+
+    @Test
+    fun `a clean close keeps its code, reason and which peer closed`() {
+        val data = json.decodeFromString<WebSocketEndData>(
+            """{"id":"1b7d0f04-3a5e-4f5f-9a2d-2c6e2f1d55aa","closeCode":1000,"closeReason":"done",
+               "closedByClient":true,"messages":4,"dropped":0,"truncated":0,
+               "bytesFromClient":16,"bytesFromServer":32,"aborted":false}"""
+        )
+
+        assertFalse(data.aborted)
+        assertEquals("1000 done (by client)", data.closeSummary)
     }
 
     @Test

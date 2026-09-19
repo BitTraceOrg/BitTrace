@@ -208,7 +208,8 @@ fun PendingChangesDialog(
     }
 }
 
-private fun labelOf(kind: ChangeKind): String = when (kind) {
+/** Shared with the project tab's git panel, so one kind reads the same in both. */
+internal fun labelOf(kind: ChangeKind): String = when (kind) {
     ChangeKind.ADDED -> "new"
     ChangeKind.MODIFIED -> "changed"
     ChangeKind.REMOVED -> "deleted"
@@ -216,7 +217,7 @@ private fun labelOf(kind: ChangeKind): String = when (kind) {
     ChangeKind.CONFLICT -> "conflict"
 }
 
-private fun toneOf(kind: ChangeKind) = when (kind) {
+internal fun toneOf(kind: ChangeKind) = when (kind) {
     ChangeKind.ADDED, ChangeKind.UNTRACKED -> P.ok
     ChangeKind.MODIFIED -> P.warn
     ChangeKind.REMOVED -> P.err

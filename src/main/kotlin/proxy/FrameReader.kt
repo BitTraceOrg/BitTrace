@@ -32,6 +32,16 @@ object Tags {
      * traffic — the only frame that arrives while nothing is being captured.
      */
     const val STATUS = 10
+
+    /**
+     * One WebSocket message, after the handshake flow it shares an id with.
+     * Messages travel outside any body, so they appear in no `COMPLETE_*`
+     * frame — this is the only place they are reported.
+     */
+    const val WEBSOCKET_MESSAGE = 11
+
+    /** The WebSocket closed, with its close handshake and totals. */
+    const val WEBSOCKET_END = 12
 }
 
 /**

@@ -11,6 +11,9 @@ import org.bittrace.data.ConnectRequestData
 import org.bittrace.data.InitialRequestData
 import org.bittrace.data.InitialResponseData
 import org.bittrace.data.SessionStore
+import org.bittrace.data.WebSocketEndData
+import org.bittrace.data.WebSocketMessageData
+import org.bittrace.data.WebSocketRecord
 
 /**
  * Ties the sidecar to the app: traffic metadata goes into [store], raw bodies
@@ -117,6 +120,16 @@ class ProxyService(
 
     private companion object {
         /**
+         * How much of one WebSocket message is retained.
+         *
+         * The sidecar already caps a message at 4 MiB, but it caps each one
+         * independently — a connection is a stream of them, and the transcript
+         * is held on the row rather than in the evicting [BodyCache]. This is
+         * the per-message share of that; [SessionStore] bounds the total.
+         */
+        const val MESSAGE_LIMIT = 256 * 1024
+
+        /**
          * The shortest gap between two progress reports for one body. Below
          * what reads as delay on a figure that is only ever a progress
          * indicator, and far above the rate the frames themselves arrive at.
@@ -187,6 +200,45 @@ class ProxyService(
             // An aborted live stream never reaches its Complete* frame, so this
             // is the only thing that will ever clear the counter.
             side?.let { store.onStreamProgress(message.id, it == BodySide.REQUEST, 0) }
+        }
+
+        /**
+         * Keeps one message, clipped to [MESSAGE_LIMIT].
+         *
+         * A message belongs to the handshake flow's row, so one that arrives
+         * for a row the store never saw — evicted by capacity, or cleared
+         * mid-connection — is simply dropped there.
+         */
+        override fun onWebSocketMessage(message: WebSocketMessageData, payload: ByteArray) {
+            val clipped = payload.size > MESSAGE_LIMIT
+            store.onWebSocketMessage(
+                message.id,
+                WebSocketRecord(
+                    message = message,
+                    payload = if (clipped) payload.copyOf(MESSAGE_LIMIT) else payload,
+                    clipped = clipped,
+                ),
+            )
+        }
+
+        override fun onWebSocketEnd(message: WebSocketEndData) {
+            store.onWebSocketEnd(message)
+            // Worth saying out loud for the same reason dropped frames are: the
+            // transcript looks whole either way, and nothing else will mention
+            // that part of the conversation was never captured.
+            if (message.dropped > 0 || message.truncated > 0) {
+                val lost = buildList {
+                    if (message.dropped > 0) add("${message.dropped} message(s) dropped")
+                    if (message.truncated > 0) add("${message.truncated} cut short")
+                }
+                onLog(
+                    LogEntry(
+                        "warn", "proxy",
+                        "websocket ${message.id} transcript is incomplete: " +
+                            lost.joinToString(", "),
+                    )
+                )
+            }
         }
 
         /**

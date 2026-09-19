@@ -1,8 +1,6 @@
 package org.bittrace.ui.layouts.forge.components
 
-import org.bittrace.ui.components.dropdownHeight
 import androidx.compose.foundation.layout.heightIn
-import org.bittrace.ui.components.DirtyDot
 import org.bittrace.ui.components.EmptyState
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -31,7 +29,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -66,7 +63,6 @@ import org.bittrace.api.ProjectNode
 import org.bittrace.api.RequestNode
 import org.bittrace.api.VariablesNode
 import org.bittrace.ui.components.CellText
-import org.bittrace.ui.components.Dropdown
 import org.bittrace.ui.P
 import org.bittrace.ui.components.PzText
 import org.bittrace.ui.components.TextInput
@@ -74,10 +70,6 @@ import org.bittrace.ui.components.VScrollbar
 import org.bittrace.ui.leftBorder
 import org.bittrace.ui.revealed
 import org.jetbrains.compose.resources.painterResource
-import org.jetbrains.jewel.foundation.GlobalColors
-import org.jetbrains.jewel.foundation.LocalGlobalColors
-import org.jetbrains.jewel.foundation.OutlineColors
-import org.jetbrains.jewel.foundation.theme.JewelTheme
 import org.jetbrains.jewel.ui.component.Icon
 import org.jetbrains.jewel.ui.component.IconActionButton
 import org.jetbrains.jewel.ui.icons.AllIconsKeys
@@ -102,7 +94,8 @@ fun CollectionTree(
     onOpen: (RequestNode) -> Unit,
     /** A project or a collection was clicked; the caller decides what selecting one means. */
     onSelectFolder: (FolderNode) -> Unit = {},
-    onOpenVariables: (VariablesNode) -> Unit = {},
+    /** A project was double-clicked: open it in the main pane. */
+    onOpenProject: (ProjectNode) -> Unit = {},
     onRename: (Node, String) -> Unit = { _, _ -> },
     onDelete: (Node) -> Unit = {},
     /**
@@ -111,8 +104,14 @@ fun CollectionTree(
      * calls a lambda, which is what keeps this file free of the plugin API.
      */
     onMenuItems: (Node) -> List<TreeMenuItem> = { emptyList() },
-    /** What to show at the right of a project row, if anything. */
-    onBadge: (Node) -> TreeBadge? = { null },
+    /**
+     * The tint for a row's version-control mark, or null for no mark at all.
+     *
+     * A colour rather than anything git-shaped: the tree draws a mark in the
+     * shade it is handed and knows no more about what the shade means than it
+     * does about who supplies the context-menu items above it.
+     */
+    onVersionMark: (Node) -> Color? = { null },
 ) {
     val expanded = remember { mutableStateMapOf<Path, Unit>() }
     val scroll = rememberScrollState()
@@ -163,8 +162,13 @@ fun CollectionTree(
                             }
 
                             is RequestNode -> onOpen(node)
-                            is VariablesNode -> onOpenVariables(node)
+                            // No longer drawn; the project tab owns the table.
+                            is VariablesNode -> Unit
                         }
+                    },
+                    onDoubleClick = {
+                        val node = line.node
+                        if (node is ProjectNode) onOpenProject(node)
                     },
                     onStartRename = {
                         editing = line.node.path
@@ -178,7 +182,7 @@ fun CollectionTree(
                     onCancelRename = { editing = null },
                     onDelete = { onDelete(line.node) },
                     menuItems = { onMenuItems(line.node) },
-                    badge = onBadge(line.node),
+                    versionMark = onVersionMark(line.node),
                 )
             }
         }
@@ -245,19 +249,9 @@ private val ICON_SLOT = 16.dp
 /** Above and below a row's content. Part of the row's height, so named once. */
 private val ROW_PADDING = 4.dp
 
-/**
- * How tall every row is, whether or not it currently has a badge.
- *
- * A project row grows a branch picker once git has finished reading the
- * repository, and that picker is taller than the 16dp icon slot beside it — so
- * without a floor here the whole tree stepped down a few pixels the moment the
- * read landed, which is the one frame the user is most likely to be looking at
- * it. Reserving the height is the same answer the `More` button below already
- * uses for the same problem, and it is derived from the picker's own metrics
- * rather than guessed, so the two cannot drift apart.
- */
+/** How tall every row is: the icon slot plus its padding. */
 private val rowHeight: Dp
-    @Composable get() = maxOf(ICON_SLOT, dropdownHeight) + ROW_PADDING * 2
+    @Composable get() = ICON_SLOT + ROW_PADDING * 2
 
 /** Where the first guide sits: the centre of a top-level row's chevron. */
 private val GUIDE_START = 16.dp
@@ -265,116 +259,13 @@ private val GUIDE_START = 16.dp
 /** One indent, so a guide lands on the chevron of the level it belongs to. */
 private val GUIDE_STEP = 14.dp
 
-/**
- * A choice at the right of a row: what it is set to, and what else it could be.
- *
- * Deliberately not git-shaped. The tree renders a value and a list of strings
- * and calls a lambda, and knows no more about what it is showing than it does
- * about who supplied the context-menu items above it.
- *
- * @param dot a small mark before the control — there is unsaved work behind it.
- */
-class TreeBadge(
-    val value: String,
-    val options: List<String> = emptyList(),
-    val dot: Boolean = false,
-    val onSelect: (String) -> Unit = {},
-)
-
-/**
- * The badge, always laid out when the row has one.
- *
- * Never hidden and revealed on hover, unlike the `More` button beside it: this
- * is what the row is *telling* you, and a value that appeared only under the
- * pointer would mean scrubbing the tree to find out where you are.
- *
- * A combo box rather than a label that opens something. Picking from a list is
- * what this control does, so it should look like the app's other list pickers
- * and behave like them — one click to open, one to choose — instead of a chip
- * that turns out to be a button that turns out to open a dialog.
- */
-@Composable
-private fun Badge(badge: TreeBadge) {
-    Row(
-        Modifier.padding(start = 6.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        if (badge.dot) {
-            DirtyDot()
-            Spacer(Modifier.width(4.dp))
-        }
-        // Shown whenever there is anything to show, including a lone value.
-        // Hiding it at one option was wrong: a project that has only `main` then
-        // renders a plain label, so the control people are told to use is
-        // invisible in exactly the case where every new project starts.
-        if (badge.options.isNotEmpty()) {
-            // Undecorated, and narrow. A bordered combo on every project row
-            // turns a tree into a stack of form fields: three projects meant
-            // three boxes of chrome competing with the names beside them, and
-            // the thing being browsed came second to the thing being set. At
-            // rest this is the branch name and a chevron; Jewel's own hover and
-            // pressed states are what say it can be clicked.
-            //
-            // The focus ring is switched off here and nowhere else. It does not
-            // come from the combo's own colours — `ComboBoxColors.Undecorated`
-            // has no border at all — but from the theme's global focus outline,
-            // so the only way to drop it for one control is to hand that control
-            // a palette with the outline cleared. Worth doing exactly here: the
-            // row already draws a selection highlight, and clicking the picker
-            // put a second box inside the first.
-            val colors = JewelTheme.globalColors
-            CompositionLocalProvider(
-                LocalGlobalColors provides GlobalColors(
-                    borders = colors.borders,
-                    outlines = OutlineColors(
-                        focused = Color.Transparent,
-                        focusedWarning = colors.outlines.focusedWarning,
-                        focusedError = colors.outlines.focusedError,
-                        warning = colors.outlines.warning,
-                        error = colors.outlines.error,
-                    ),
-                    text = colors.text,
-                    panelBackground = colors.panelBackground,
-                    toolwindowBackground = Color.Unspecified
-                ),
-            ) {
-                Dropdown(
-                    value = badge.value,
-                    options = badge.options,
-                    width = BADGE_WIDTH,
-                    bordered = false,
-                    onSelect = badge.onSelect,
-                )
-            }
-        } else {
-            // Nothing to pick from at all — a detached HEAD, or a repo whose
-            // state has not been read yet. A readout, not a dead control.
-            PzText(badge.value, color = P.dim, style = Typo.micro, family = P.Ui, softWrap = false)
-        }
-    }
-}
-
-/**
- * Enough for a short branch name and its chevron.
- *
- * Deliberately mean: the row's own name is what the tree is for, and every
- * pixel here is taken from it. A long branch name truncates, which is the right
- * trade — you can see the whole list the moment you open it.
- */
-private val BADGE_WIDTH = 92.dp
-
 private fun flatten(nodes: List<Node>, expanded: Set<Path>, depth: Int = 0): List<Line> =
     nodes.flatMap { node ->
         val self = listOf(Line(node, depth))
         if (node !is FolderNode || node.path !in expanded) {
             self
         } else {
-            // A project's variables sit above its collections rather than among
-            // them. Emitted here rather than carried in `children`, so that
-            // everything walking the tree for requests keeps meaning what it
-            // says instead of filtering this row back out.
-            val leading = if (node is ProjectNode) listOf(Line(node.variables, depth + 1)) else emptyList()
-            self + leading + flatten(node.children, expanded, depth + 1)
+            self + flatten(node.children, expanded, depth + 1)
         }
     }
 
@@ -387,12 +278,13 @@ private fun TreeRow(
     draft: String,
     onDraft: (String) -> Unit,
     onClick: () -> Unit,
+    onDoubleClick: () -> Unit,
     onStartRename: () -> Unit,
     onCommitRename: () -> Unit,
     onCancelRename: () -> Unit,
     onDelete: () -> Unit,
     menuItems: () -> List<TreeMenuItem>,
-    badge: TreeBadge?,
+    versionMark: Color?,
 ) {
     val folder = line.node is FolderNode
     // Read here rather than inside `drawBehind`: a draw scope is not a
@@ -459,12 +351,14 @@ private fun TreeRow(
                 // a rename without the first tap also toggling the folder.
                 .pointerInput(line.node.path, editing) {
                     if (!editing) {
-                        // A variables row has no name of its own to change, so a
-                        // double-tap there is just a tap.
-                        val renamable = line.node !is VariablesNode
+                        // A project opens in the main pane — it is the one row
+                        // with somewhere to be opened *to*, and rename stays
+                        // reachable on its context menu. Everything else renames,
+                        // as before.
+                        val isProject = line.node is ProjectNode
                         detectTapGestures(
                             onTap = { onClick() },
-                            onDoubleTap = { if (renamable) onStartRename() },
+                            onDoubleTap = { if (isProject) onDoubleClick() else onStartRename() },
                         )
                     }
                 },
@@ -511,12 +405,6 @@ private fun TreeRow(
                         contentDescription = "Collection",
                         tint = P.warn,
                     )
-            } else if (line.node is VariablesNode) {
-                Icon(
-                    key = AllIconsKeys.Debugger.VariablesTab,
-                    contentDescription = "Variables",
-                    tint = P.key,
-                )
             } else {
                 val method = (line.node as? RequestNode)?.method.orEmpty()
                 PzText(
@@ -579,7 +467,20 @@ private fun TreeRow(
         // whole row then, and a combo beside it would be a second place for the
         // keyboard to go.
         if (!editing) {
-            badge?.let { Badge(it) }
+            // Always laid out, never revealed on hover: this is something the
+            // row is telling you, and a mark that appeared only under the
+            // pointer would mean scrubbing the tree to find out which projects
+            // are repositories. It is a readout and nothing more — everything
+            // that acts on the repository lives in the project's own git panel.
+            versionMark?.let { tint ->
+                Icon(
+                    key = AllIconsKeys.Vcs.Branch,
+                    contentDescription = "Under version control",
+                    tint = tint,
+                    modifier = Modifier.size(ICON_SLOT),
+                )
+                Spacer(Modifier.width(4.dp))
+            }
 
             // One overflow button rather than a row of loose icons: collections
             // and requests take the same actions, so they take the same
@@ -607,18 +508,14 @@ private fun TreeRow(
                         onDismissRequest = { menuOpen = false; true },
                         horizontalAlignment = Alignment.End,
                     ) {
-                        // Not offered on a variables row: the store refuses both,
-                        // and a verb that always fails is worse than an absent one.
-                        if (line.node !is VariablesNode) {
-                            selectableItem(
-                                selected = false,
-                                onClick = { menuOpen = false; onStartRename() },
-                            ) {
-                                PzText("Rename", color = P.text, style = Typo.label, family = P.Ui)
-                            }
-                            selectableItem(selected = false, onClick = { menuOpen = false; onDelete() }) {
-                                PzText("Delete", color = P.text, style = Typo.label, family = P.Ui)
-                            }
+                        selectableItem(
+                            selected = false,
+                            onClick = { menuOpen = false; onStartRename() },
+                        ) {
+                            PzText("Rename", color = P.text, style = Typo.label, family = P.Ui)
+                        }
+                        selectableItem(selected = false, onClick = { menuOpen = false; onDelete() }) {
+                            PzText("Delete", color = P.text, style = Typo.label, family = P.Ui)
                         }
                         // Asked for on open, not on every recomposition of the
                         // row: a menu that is shut costs nothing, and an item's

@@ -1,9 +1,7 @@
 package org.bittrace.data
 
 import org.bittrace.ui.instantOf
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.setValue
+import androidx.compose.runtime.mutableStateMapOf
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.builtins.MapSerializer
 import kotlinx.serialization.builtins.serializer
@@ -27,15 +25,27 @@ import java.time.format.DateTimeFormatter
  */
 class ActivityStore(private val file: Path = defaultPath()) {
 
-    /** Snapshot-backed so the heatmap redraws as traffic arrives. */
-    var days by mutableStateOf<Map<LocalDate, Int>>(emptyMap())
-        private set
+    /**
+     * Snapshot-backed so the heatmap redraws as traffic arrives.
+     *
+     * A snapshot *map* rather than a snapshot holding an immutable one. Both
+     * redraw the heatmap; the difference is what a single captured request
+     * costs. Replacing the map meant [record] copied every day the tally had
+     * ever held — and it holds up to [RETAIN_DAYS] of them — on the event
+     * thread, once per flow. Here a request touches one key.
+     *
+     * Exposed as a plain [Map] because that is all a reader needs, and because
+     * the tally is this class's to change.
+     */
+    private val tally = mutableStateMapOf<LocalDate, Int>()
+
+    val days: Map<LocalDate, Int> get() = tally
 
     private val json = Json { prettyPrint = true; ignoreUnknownKeys = true }
     private var dirty = false
 
     init {
-        days = load()
+        tally.putAll(load())
     }
 
     /**
@@ -47,7 +57,7 @@ class ActivityStore(private val file: Path = defaultPath()) {
      */
     fun record(startedDateTime: String) {
         val day = dayOf(startedDateTime) ?: return
-        days = days + (day to (days[day] ?: 0) + 1)
+        tally[day] = (tally[day] ?: 0) + 1
         dirty = true
     }
 

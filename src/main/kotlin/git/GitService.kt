@@ -14,6 +14,12 @@ import org.eclipse.jgit.api.ListBranchCommand
 import org.eclipse.jgit.api.MergeCommand
 import org.eclipse.jgit.api.errors.TransportException
 import org.eclipse.jgit.diff.DiffConfig
+import org.eclipse.jgit.util.io.DisabledOutputStream
+import org.eclipse.jgit.treewalk.EmptyTreeIterator
+import org.eclipse.jgit.treewalk.CanonicalTreeParser
+import org.eclipse.jgit.diff.DiffFormatter
+import org.eclipse.jgit.diff.DiffEntry
+import org.eclipse.jgit.api.RebaseResult
 import org.eclipse.jgit.lib.Constants
 import org.eclipse.jgit.lib.Repository
 import org.eclipse.jgit.revwalk.FollowFilter
@@ -338,6 +344,152 @@ class GitService(
         }
 
     /** [file]'s text at [commit], or null when it did not exist there. */
+    /**
+     * The files one commit changed, against its parent.
+     *
+     * The root commit has no parent, so it is diffed against the empty tree —
+     * otherwise the first commit in a project would report nothing changed,
+     * which is the one commit where everything did.
+     *
+     * A rename reads as a change to the new path rather than as a delete and an
+     * add. Renaming a request in the tree is an ordinary `Files.move`, so
+     * without rename detection the log would show every rename as two entries
+     * and neither of them as the file you are looking for.
+     */
+    suspend fun changedIn(project: Path, commit: String): Result<List<FileChange>> =
+        runIn(project, lock = false) { git ->
+            val repository = git.repository
+            val id = repository.resolve(commit) ?: throw GitFailure.Broken("No such commit: $commit")
+            RevWalk(repository).use { walk ->
+                val target = walk.parseCommit(id)
+                val parent = target.parents.firstOrNull()?.let { walk.parseCommit(it.id) }
+                repository.newObjectReader().use { reader ->
+                    val before = if (parent == null) {
+                        EmptyTreeIterator()
+                    } else {
+                        CanonicalTreeParser().apply { reset(reader, parent.tree) }
+                    }
+                    val after = CanonicalTreeParser().apply { reset(reader, target.tree) }
+                    DiffFormatter(DisabledOutputStream.INSTANCE).use { diff ->
+                        diff.setRepository(repository)
+                        diff.isDetectRenames = true
+                        diff.scan(before, after).map { entry ->
+                            val path = if (entry.changeType == DiffEntry.ChangeType.DELETE) {
+                                entry.oldPath
+                            } else {
+                                entry.newPath
+                            }
+                            FileChange(project.resolve(path), kindOf(entry.changeType))
+                        }
+                    }
+                }
+            }
+        }
+
+    /**
+     * Puts the working tree back to how it looked at [commit], staged.
+     *
+     * Deliberately *not* a reset: the branch does not move and nothing is
+     * dropped from history. What comes back is the content, staged and ready,
+     * so undoing three commits is itself a commit you write and can undo in
+     * turn. The alternative — moving the branch and discarding what came after
+     * — is unrecoverable from inside this app, and a button in a list is the
+     * wrong place to offer it.
+     *
+     * Two halves, because a checkout of paths only writes files that exist in
+     * the source tree: whatever the commit *had* is restored from it, and
+     * whatever has been added since is removed. Without the second half,
+     * "restore to this point" would leave every file created afterwards sitting
+     * in the tree, which is not that point.
+     */
+    suspend fun restoreTo(project: Path, commit: String): Result<RestoreReport> = runIn(project) { git ->
+        val repository = git.repository
+        val id = repository.resolve(commit) ?: throw GitFailure.Broken("No such commit: $commit")
+        val head = repository.resolve(Constants.HEAD) ?: throw GitFailure.Broken("This project has no commits yet.")
+
+        val (restored, added) = RevWalk(repository).use { walk ->
+            val target = walk.parseCommit(id)
+            val current = walk.parseCommit(head)
+            repository.newObjectReader().use { reader ->
+                val before = CanonicalTreeParser().apply { reset(reader, target.tree) }
+                val after = CanonicalTreeParser().apply { reset(reader, current.tree) }
+                DiffFormatter(DisabledOutputStream.INSTANCE).use { diff ->
+                    diff.setRepository(repository)
+                    // Rename detection off here: this is a set of paths to put
+                    // back or take away, and a rename seen as one entry would
+                    // hide one of the two paths that has to move.
+                    diff.isDetectRenames = false
+                    val entries = diff.scan(before, after)
+                    // Present then, gone or different now.
+                    val restore = entries
+                        .filter { it.changeType != DiffEntry.ChangeType.ADD }
+                        .map { it.oldPath }
+                    // Absent then, present now.
+                    val remove = entries
+                        .filter { it.changeType == DiffEntry.ChangeType.ADD }
+                        .map { it.newPath }
+                    restore to remove
+                }
+            }
+        }
+
+        if (restored.isEmpty() && added.isEmpty()) {
+            RestoreReport(0, 0)
+        } else {
+            if (restored.isNotEmpty()) {
+                git.checkout().setStartPoint(commit).apply { restored.forEach { addPath(it) } }.call()
+            }
+            added.forEach { git.rm().addFilepattern(it).call() }
+            RestoreReport(restored.size, added.size)
+        }
+    }
+
+    /**
+     * Fetches, then replays this branch's own commits on top of the upstream.
+     *
+     * What "re-sync" means for a branch that has moved on at both ends. Unlike
+     * [pull] this does not refuse a divergence — replaying is the point — but
+     * it is still the same working tree being rewritten, so callers run it
+     * behind the unsaved-tabs guard.
+     *
+     * **A stop is left standing.** When a replay conflicts, JGit leaves the
+     * repository mid-rebase and this reports which files; it does not abort.
+     * That is a deliberate choice: the alternative silently throws away the
+     * replay so far, and a conflicted rebase is at least a state git's own
+     * tools can finish. It does mean BitTrace cannot get you out of it — the
+     * app has no merge UI — so the message says as much.
+     */
+    suspend fun rebase(project: Path): Result<RebaseReport> = runIn(project) { git ->
+        val remote = requireRemote(git)
+        val branch = git.repository.branch
+        val tracking = org.eclipse.jgit.lib.BranchTrackingStatus.of(git.repository, branch)
+            ?: throw GitFailure.NoUpstream(branch)
+
+        git.fetch()
+            .setRemote(remote.name)
+            .setTransportConfigCallback(credentials.callbackFor(remote.url))
+            .call()
+
+        // Read again: the fetch is what makes this number worth reporting.
+        val ahead = org.eclipse.jgit.lib.BranchTrackingStatus.of(git.repository, branch)?.aheadCount ?: 0
+        val result = git.rebase().setUpstream(tracking.remoteTrackingBranch).call()
+
+        when {
+            result.status == RebaseResult.Status.UP_TO_DATE -> RebaseReport(true, 0, emptyList())
+            result.status.isSuccessful -> RebaseReport(false, ahead, emptyList())
+            else -> RebaseReport(
+                upToDate = false,
+                replayed = 0,
+                // `conflicts` is null for a stop that is not a content clash —
+                // an uncommitted change in the way, say — and the failing paths
+                // are then in `failingPaths`. Either way the caller wants names.
+                conflicts = result.conflicts
+                    ?: result.failingPaths?.keys?.toList()
+                    ?: listOf(result.status.name.lowercase().replace('_', ' ')),
+            )
+        }
+    }
+
     suspend fun contentAt(project: Path, file: Path, commit: String): Result<String?> =
         runIn(project, lock = false) { git ->
             val repository = git.repository
@@ -428,6 +580,13 @@ class GitService(
      * unauthenticated push with `git-receive-pack not permitted`, which names a
      * wire protocol rather than the setting to go and change.
      */
+    /** A diff entry's change type, in the vocabulary the status list already uses. */
+    private fun kindOf(type: DiffEntry.ChangeType): ChangeKind = when (type) {
+        DiffEntry.ChangeType.ADD, DiffEntry.ChangeType.COPY -> ChangeKind.ADDED
+        DiffEntry.ChangeType.DELETE -> ChangeKind.REMOVED
+        DiffEntry.ChangeType.MODIFY, DiffEntry.ChangeType.RENAME -> ChangeKind.MODIFIED
+    }
+
     private fun requireRemote(git: Git, needsWrite: Boolean = false): RemoteRef {
         val remote = git.remoteList().call().firstOrNull() ?: throw GitFailure.NoRemote()
         val ref = RemoteRef(remote.name, remote.urIs.firstOrNull()?.toString().orEmpty())

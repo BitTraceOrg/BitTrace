@@ -53,7 +53,10 @@ object ProjectVariables {
     /** Temp file plus move, so a failure part-way cannot truncate what is there. */
     fun write(project: Path, rows: List<KeyValue>) {
         val file = pathIn(project)
-        val kept = rows.filterNot { it.name.isBlank() && it.value.isBlank() }
+        // A description counts as content, the same way the table's own blank-row
+        // rule counts it: a row noted before it was named is work someone typed,
+        // and dropping it on save would take it away without saying so.
+        val kept = rows.filterNot { it.name.isBlank() && it.value.isBlank() && it.description.isBlank() }
         if (kept.isEmpty()) {
             Files.deleteIfExists(file)
             return

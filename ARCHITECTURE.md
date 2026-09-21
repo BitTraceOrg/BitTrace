@@ -273,8 +273,17 @@ proxy endpoint in the middle. Interactive strips there are marked with
 **This is why the app needs the JetBrains Runtime.** `DecoratedWindow` throws on
 any other JVM — there is no fallback. See the build notes at the end.
 
-The import dialog keeps its hand-built bar: `TitleBar` needs a
-`DecoratedWindowScope`, and `DialogWindow` has none.
+Every window in the app wears this frame: the main one, the tool windows, and
+the dialogs behind `AppDialog`. The dialogs were the holdout — they were
+undecorated `DialogWindow`s with a title strip, a drag area and a close button
+drawn by hand, because `TitleBar` needs a `DecoratedWindowScope` and a
+`DialogWindow` has none. Moving them to `DecoratedWindow` cost the ownership a
+dialog used to get for free: it no longer sits above the window that opened it
+and it now takes a task-bar entry of its own, so `AppDialog` defaults
+`alwaysOnTop` to true to buy the first half back. Each window also passes
+`icon = appIcon()` (`ui/AppIcon.kt`); the installer sets the icon for the
+packaged app, but an unpackaged `gradlew run` gives any window that does not ask
+the default Java cup.
 
 ### Body formatters
 
@@ -318,10 +327,10 @@ are on screen, one window per tool, so asking twice brings you the one you have.
 `ToolWindow` is the shared frame: a `DecoratedWindow` with a `TitleBar`, the same
 pair the main window uses, so minimise, maximise, restore, edge resize and
 Windows snap layouts come from the platform rather than from hand-drawn buttons
-approximating them. It is a `Window` and not the `DialogWindow` behind
-`AppDialog`, which is a separate decision: a dialog always sits in front of the
-main window and takes its attention, whereas a tool should minimise on its own
-and appear in the taskbar. Tool windows are composed as siblings of the main
+approximating them. `AppDialog` now uses the same pair, and what separates
+them is what each is for rather than how it is built: a dialog is kept in front
+of the window that opened it and wants an answer, whereas a tool minimises on
+its own and waits in the taskbar. Tool windows are composed as siblings of the main
 window inside the same composition, so they inherit the theme without being
 passed it — and, like it, they need the JetBrains Runtime.
 
@@ -343,6 +352,19 @@ the same message layout the Raw tab assembles. `tools/Diff.kt` is the alignment,
 kept pure and covered by `DiffTest`; it trims the common head and tail before
 building an LCS table, and past `CELL_LIMIT` reports the middle as one block
 rather than hanging the window on an exact answer.
+
+Both sides are drawn by `tools/DiffPane.kt`, which is the app's own KodeMirror
+surface with the same read-only bundle every other captured body is read
+through — so a compared response is syntax-highlighted by its media type,
+searchable with `Mod-F`, selectable and foldable. The diff's own colours are
+line decorations contributed by a `ViewPlugin`, the shape the port's
+`highlightActiveLine` uses. Each pane's document is the *aligned* text, one line
+per row and blank where that side has no line, so both have the same line count
+and one scroll outside them keeps them level; that means both are laid out at
+full height, which is why the view caps at `MAX_ROWS` and says so when it
+clipped. The gutter therefore numbers aligned rows rather than each file's own
+lines — the two sides agree on every number, which is what reading across a diff
+wants.
 
 ## The code surface
 
@@ -701,6 +723,16 @@ remote threw out; and `PushCommand` has no `setUpstream`, so the two config keys
 are written by hand, without which the branch reads as untracked forever and
 Pull refuses immediately after a successful publish.
 
+**Importing a project** is a clone into the collections folder
+(`GitService.clone`, reached from **Forge > Import project...**). Nothing has to
+be unpacked afterwards, because a project already *is* a folder of collections —
+the payoff of the layout being plain directories. The folder is named after the
+repository, numbered through the same `freeName` as everything else, and it is
+chosen before the clone because git wants to create the directory itself. A
+failed clone takes its half-written directory with it: JGit leaves the partial
+checkout behind, and a folder holding a `.git` and three of forty requests would
+read in the tree as a project with nothing saying it is unfinished.
+
 Auth is split by kind. SSH uses `~/.ssh` and the agent, with a passphrase
 provider that always declines — the default tries to prompt on a console a
 windowed app does not have, so a locked key would hang forever instead of
@@ -735,7 +767,19 @@ ordinary flows and appear in the grid.
   on purpose: with the plain interface, `HttpClient` silently skips hostname
   verification.
 - **Tabs.** `ApiClientState` holds a list of `RequestTab`s, each with its own
-  draft, response and in-flight job, so switching tabs cancels nothing.
+  draft, response and in-flight job, so switching tabs cancels nothing. The list
+  **may be empty**, and the pane draws a holding panel when it is. It used to
+  open a blank draft at startup and conjure another whenever the last tab
+  closed, which meant there was never a moment where the pane could say what to
+  do next — and `New request` was doing two jobs, the one you asked for and the
+  one that appeared behind you.
+- **The project tab** carries three sections over one folder — Overview,
+  Variables and Git. Overview is a split: the readouts on the left, the
+  project's `DOCUMENTATION.md` rendered on the right, where a double-click swaps
+  in the source to edit. The draft lives on `ProjectTab`, not in the panel, so
+  `saveAll`, the close prompt and the checkout guard all see it; `dirty` is
+  computed from the two halves (table and page) so one Save means the tab, and
+  the page is only written when it was edited.
 - **GraphQL is two documents.** `ApiBody` keeps the operation in `text` and the
   variables in `graphqlVariables`, because they are different languages wanting
   different highlighting and different halves of the editor; a single blob would
@@ -829,8 +873,8 @@ lost.
 `CollectionStore.importInto` supplies the policy: a project accepts folders, a
 collection accepts `.yaml` files, and anything else is counted in the notice
 rather than written. A clashing name is numbered through the same `freeName`
-that `createNamedCollection` uses — nothing on disk is ever replaced, on the
-same reasoning that makes `delete()` move to `.trash`.
+that `createNamedCollection` uses — nothing on disk is ever replaced, because an
+import is not a restore.
 
 ### Storage
 
@@ -843,15 +887,36 @@ BitTrace/
   history.yaml       HistoryStore  — distinct sent requests
   collections/       one folder per project, one per collection inside it,
                      one YAML per request
+    <project>/
+      .bittrace-variables.yaml   the project's variable table
+      DOCUMENTATION.md           its page of prose (ProjectDocs)
   plugins/           external plugin JARs
 ```
+
+**A fresh install is not an empty one.** The absence of `collections/` is what
+"first run" means, and `CollectionStore.reload` seeds it with
+`Scratches / Scratches / Scratch request.yaml` before the first walk — ordinary
+folders and an ordinary request file, so they rename, move, commit and delete
+like anything made by hand. Deleting every project later leaves the folder
+behind, so nothing is seeded again: an app that rebuilt the scaffold each time
+the tree went empty would be arguing with whoever emptied it.
+
+**`DOCUMENTATION.md`** is written into any project that has none, on every walk
+rather than at creation, so a project made before the file existed — or cloned
+from a repository that never had one — gets its page on the next load instead of
+never. It is plain Markdown with no leading dot, because unlike the variables
+file it is meant to be seen, edited elsewhere and read on the forge once the
+project is pushed. `CollectionStore` only takes a `.yaml` for a request, so a
+`.md` at that level costs the walk nothing.
 
 Saved requests are three fixed levels deep — **project > collection > request**
 — and the tree mirrors that layout one-to-one, so either rung can be copied,
 shared or version-controlled as a folder. The depth is what carries the
 meaning, so it is fixed rather than arbitrary: anything at the wrong level (a
 stray YAML beside a project, a folder inside a collection) is not shown, and is
-left alone on disk rather than moved or deleted. A pre-project layout — the
+left alone on disk rather than moved or deleted. Deleting a node, by contrast,
+deletes it: `CollectionStore.delete` removes the file or the folder and
+everything under it, with no recycling step in between. A pre-project layout — the
 collections that used to sit at the root — is adopted once on load by moving
 those folders wholesale under a single project, so nothing silently disappears
 the first time the new walk runs. Saving a request is **explicit**,

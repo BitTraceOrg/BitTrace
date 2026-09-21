@@ -208,6 +208,74 @@ fun PendingChangesDialog(
     }
 }
 
+/**
+ * Brings a project in from a git repository.
+ *
+ * A clone, not an import: what lands is the repository as it is, in the
+ * collections folder, and the next walk finds a project where there was none.
+ * There is nothing to unpack afterwards, because a project already *is* a
+ * folder of collections — which is the whole reason the layout is plain
+ * directories and files.
+ *
+ * Asks for a URL and nothing else. The folder is named after the repository,
+ * numbered if that name is taken, and renaming it afterwards is a rename in the
+ * tree like any other.
+ */
+@Composable
+fun ImportProjectDialog(onDismiss: () -> Unit, onImport: (String) -> Unit) {
+    var url by remember { mutableStateOf("") }
+    val focus = rememberFocused()
+
+    val trimmed = url.trim()
+    val ssh = trimmed.startsWith("git@") || trimmed.startsWith("ssh://")
+    val valid = trimmed.isNotBlank() && (ssh || trimmed.startsWith("http"))
+
+    AppDialog(
+        title = "Import project",
+        size = DpSize(500.dp, 250.dp),
+        resizable = false,
+        surface = P.panel,
+        onClose = onDismiss,
+        footer = { DialogFooter("Import", onDismiss, valid) { onImport(trimmed) } },
+    ) {
+        Column(Modifier.fillMaxWidth().padding(14.dp)) {
+            PzText(
+                "Paste the URL of a repository holding a BitTrace project. It is cloned " +
+                    "into your collections folder and appears in the tree as a project.",
+                color = P.dim, style = Typo.label, family = P.Ui,
+            )
+            Spacer(Modifier.height(10.dp))
+            TextInput(
+                value = url,
+                onValueChange = { url = it },
+                placeholder = "https://github.com/you/payments-api.git",
+                modifier = Modifier.fillMaxWidth()
+                    .focusRequester(focus)
+                    .onPreviewKeyEvent { event ->
+                        if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                        when (event.key) {
+                            Key.Enter, Key.NumPadEnter -> {
+                                if (valid) onImport(trimmed)
+                                true
+                            }
+                            Key.Escape -> { onDismiss(); true }
+                            else -> false
+                        }
+                    },
+            )
+            Spacer(Modifier.height(10.dp))
+            PzText(
+                if (ssh) {
+                    "SSH: your ~/.ssh keys and agent are used. Nothing is needed in Settings."
+                } else {
+                    "HTTPS: public repositories need nothing; a private one uses the token from Settings › Git."
+                },
+                color = P.faint, style = Typo.caption, family = P.Ui,
+            )
+        }
+    }
+}
+
 /** Shared with the project tab's git panel, so one kind reads the same in both. */
 internal fun labelOf(kind: ChangeKind): String = when (kind) {
     ChangeKind.ADDED -> "new"

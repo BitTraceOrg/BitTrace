@@ -42,7 +42,9 @@ went.
   Capture is best-effort by design: the sidecar drops chunks rather than
   stalling the proxy's event loop behind a slow reader, and the loss is counted
   and logged rather than hidden.
-- **HAR import and export**, and a **diff tool** for comparing two flows.
+- **HAR import and export**, and a **diff tool** for comparing two flows —
+  side by side in the same editor the inspector uses, so both halves are
+  highlighted, searchable and foldable while the changed lines stay washed.
 
 ### The Forge — an API client
 
@@ -54,17 +56,26 @@ went.
 - **Project variables.** Write `{{host}}` in a URL, a header, a body or an auth
   field. Substitution happens at send time and is never written back, so the
   saved file describes an endpoint rather than one machine's idea of it.
+- **A documentation page per project.** Every project carries a
+  `DOCUMENTATION.md`, rendered beside the project's facts and edited in place by
+  double-clicking it. Ordinary Markdown in an ordinary file, so it travels with
+  the repository and reads on the forge you push it to.
 - **Auth**: OAuth 2 with a loopback redirect listener, OAuth 1, JWT assertion
   grants, bearer tokens, basic auth and API keys.
 - **Git, built in.** Projects are repositories: branch, stage and commit through
   a file picker, push, pull, and read a request's history from git itself rather
   than from a log the app keeps. JGit, not a shelled-out `git`, so it works on a
   machine with no git installed. SSH uses the keys and agent already on your
-  machine; HTTPS uses a token from Settings.
+  machine; HTTPS uses a token from Settings. **Import project** clones a
+  repository straight into your collections folder — a project already *is* a
+  folder of collections, so there is nothing to unpack afterwards.
 - **Import from cURL**, convert a captured flow into a request, and export a
   collection as a zip.
 - **Send history**, per-request settings, and an unsaved-changes guard that
   stops a checkout overwriting work in progress.
+- **Nothing opens behind you.** A fresh install starts with one scratch project
+  to put something in, and closing the last tab leaves a panel saying what opens
+  the next one — rather than a blank request nobody asked for.
 
 ### Home
 

@@ -22,25 +22,28 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import org.bittrace.api.CollectionNode
 import org.bittrace.api.Node
 import org.bittrace.api.ProjectNode
+import org.bittrace.api.ProjectDocs
 import org.bittrace.api.ProjectSection
 import org.bittrace.api.ProjectTab
 import org.bittrace.api.RequestNode
 import org.bittrace.git.GitState
 import org.bittrace.ui.dayClockOf
-import org.bittrace.ui.rightBorder
 import org.bittrace.ui.bottomBorder
-import org.bittrace.ui.leftBorder
 import org.bittrace.ui.components.GhostButton
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.clickable
+import org.bittrace.ui.components.MarkdownText
 import org.bittrace.ui.components.TextArea
 import org.bittrace.ui.components.CheckBoxRow
 import org.bittrace.git.GitStore
@@ -53,12 +56,17 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.fillMaxHeight
 import org.bittrace.ui.P
 import org.bittrace.ui.Typo
 import org.bittrace.ui.components.EmptyState
+import org.bittrace.ui.components.PANE_HEADER_HEIGHT
 import org.bittrace.ui.components.PaneHeader
 import org.bittrace.ui.components.PrimaryButton
+import org.bittrace.ui.components.SplitPane
+import org.bittrace.ui.components.VerticalSplitter
 import org.jetbrains.jewel.ui.component.DefaultSplitButton
 import org.bittrace.ui.components.PzText
 import org.bittrace.ui.components.TabContentSwitcher
@@ -100,6 +108,26 @@ class ProjectGitActions(
 )
 
 /**
+ * The panel widths this tab remembers, and how to move them.
+ *
+ * A bundle for the same reason [ProjectGitActions] is one: three splitters
+ * across two sections is six parameters that always travel together, and the
+ * pane's job is to hand each one to the split that owns it. The values come
+ * from the settings store and the callbacks write back to it, so the pane
+ * itself still knows nothing about where a width is kept.
+ */
+class ProjectPaneSizes(
+    val docWidth: Dp,
+    val onDocResize: (Dp) -> Unit,
+    /** The Git panel's changes column, on the left. */
+    val gitSidebarWidth: Dp,
+    val onGitSidebarResize: (Dp) -> Unit,
+    /** The Git panel's commit-file list, on the right. */
+    val gitDetailWidth: Dp,
+    val onGitDetailResize: (Dp) -> Unit,
+)
+
+/**
  * A project, as a tab: what it holds, its variables, and its git controls.
  *
  * Three bands down the pane — the project's own name, the section strip, then
@@ -123,6 +151,8 @@ fun ProjectPane(
     node: ProjectNode?,
     git: GitStore,
     actions: ProjectGitActions,
+    /** The remembered width of every panel this tab can drag. */
+    sizes: ProjectPaneSizes,
     onSave: () -> Unit,
 ) {
     val state = git.stateOf(tab.project)
@@ -139,9 +169,9 @@ fun ProjectPane(
             },
         ) {
             when (tab.section) {
-                ProjectSection.Overview -> Overview(tab, node, state)
+                ProjectSection.Overview -> Overview(tab, node, state, sizes, onSave)
                 ProjectSection.Variables -> Variables(tab, onSave)
-                ProjectSection.Git -> Git(tab.project, git, state, actions)
+                ProjectSection.Git -> Git(tab.project, git, state, actions, sizes)
             }
         }
     }
@@ -189,19 +219,46 @@ private fun ProjectHeading(tab: ProjectTab) {
 //region Sections ───────────────────────────────────────────────────────────────────────────────────────────────────────
 
 /**
- * What this project is and what is in it.
+ * What this project is and what is in it, with its documentation beside it.
  *
- * A column of readouts, each with its own tinted glyph. The glyph is what makes
- * this scannable — five lines of label-and-value read as a form, where an icon
- * per row lets you find the one you came for without reading any of the others.
+ * The readouts are a column of label-and-value rows, each with its own tinted
+ * glyph — five lines of the same shape read as a form, where an icon per row
+ * lets you find the one you came for without reading any of the others.
  *
- * Safe to scroll, unlike the pane's earlier shape: nothing in here scrolls
- * itself, so there is no child to measure with an unbounded height.
+ * Documentation sits on the right rather than under them because it is the part
+ * that is read, and a page of prose below five one-line facts is a page nobody
+ * scrolls to. The facts are narrow by nature; the prose wants the width — so it
+ * is the remembered side of the split, and the readouts take what is left.
+ *
+ * Always side by side, unlike the request builder's own split: that one follows
+ * the dock setting because its two halves are a request and its response, which
+ * some people read stacked. A page of prose beside a short form is not the same
+ * question.
+ *
+ * Safe to scroll, unlike the pane's earlier shape: each side scrolls itself, so
+ * neither is a child measured with an unbounded height inside the other.
  */
 @Composable
-private fun Overview(tab: ProjectTab, node: ProjectNode?, git: GitState) {
+private fun ColumnScope.Overview(
+    tab: ProjectTab,
+    node: ProjectNode?,
+    git: GitState,
+    sizes: ProjectPaneSizes,
+    onSave: () -> Unit,
+) {
+    SplitPane(
+        horizontal = true,
+        secondSize = sizes.docWidth,
+        onResize = sizes.onDocResize,
+        second = { paneModifier -> Documentation(tab, onSave, paneModifier) },
+        first = { paneModifier -> Readouts(tab, node, git, paneModifier) },
+    )
+}
+
+@Composable
+private fun Readouts(tab: ProjectTab, node: ProjectNode?, git: GitState, modifier: Modifier) {
     val scroll = rememberScrollState()
-    Column(Modifier.fillMaxSize().verticalScroll(scroll)) {
+    Column(modifier.verticalScroll(scroll)) {
         Column(
             Modifier.fillMaxWidth().padding(INSET),
             verticalArrangement = Arrangement.spacedBy(14.dp),
@@ -241,6 +298,101 @@ private fun Overview(tab: ProjectTab, node: ProjectNode?, git: GitState) {
                 value = node?.let { count(it.children.size, "collection") } ?: UNKNOWN,
                 tone = if (node == null) P.err else P.text,
             )
+        }
+    }
+}
+
+/**
+ * The project's `DOCUMENTATION.md`, rendered — and edited in place.
+ *
+ * Read first, written second. The panel opens on the rendered page because that
+ * is what documentation is for, and a double-click anywhere on it swaps in the
+ * source — the same gesture the tree uses to open a project, and the one people
+ * try on a page of text before they look for a button. It is the only way in:
+ * the header says so in a line of type rather than offering a second one.
+ *
+ * The draft lives on [ProjectTab], not here. A text area's own state would be
+ * dropped by switching tabs and saved by nothing — `saveAll`, the close prompt
+ * and the checkout guard all see the tab and only the tab.
+ *
+ * Cancel re-reads the file rather than remembering what was in it when editing
+ * began: the file is the truth, and a pull landing mid-edit is exactly when the
+ * remembered copy would be wrong.
+ */
+@Composable
+private fun Documentation(tab: ProjectTab, onSave: () -> Unit, modifier: Modifier) {
+    // Keyed on the project so a second project's tab does not open in whatever
+    // mode the first was left in.
+    var editing by remember(tab.project) { mutableStateOf(false) }
+
+    Column(modifier) {
+        // A fixed height rather than the strip's own minimum: the buttons that
+        // appear while editing are taller than a line of text, and a header
+        // that grew by ten pixels on the double-click shifted the whole page
+        // under the cursor that had just landed on it.
+        PaneHeader(Modifier.heightIn(min = DOC_HEADER)) {
+            Icon(
+                key = AllIconsKeys.Actions.Annotate,
+                contentDescription = "Documentation",
+                tint = P.info,
+                modifier = Modifier.size(16.dp),
+            )
+            Spacer(Modifier.width(8.dp))
+            PzText(
+                ProjectDocs.FILE_NAME,
+                color = P.text, style = Typo.label, family = P.Ui,
+                weight = FontWeight.SemiBold, softWrap = false, maxLines = 1,
+                modifier = Modifier.padding(vertical = HEADER_PAD),
+            )
+            Spacer(Modifier.weight(1f))
+            if (editing) {
+                GhostButton("Cancel", modifier = Modifier.padding(horizontal = 2.dp)) {
+                    tab.doc = ProjectDocs.read(tab.project)
+                    tab.docDirty = false
+                    editing = false
+                }
+                Spacer(Modifier.width(6.dp))
+                PrimaryButton(
+                    "Save",
+                    enabled = tab.docDirty,
+                    modifier = Modifier.padding(horizontal = 6.dp),
+                ) {
+                    onSave()
+                    editing = false
+                }
+            } else {
+                // A line of type, not a button: the gesture is the way in, and
+                // a control beside it only invites the click that does nothing.
+                PzText(
+                    "Double-click to edit",
+                    color = P.faint, style = Typo.caption, family = P.Ui,
+                    softWrap = false, maxLines = 1,
+                    modifier = Modifier.padding(vertical = HEADER_PAD, horizontal = 6.dp),
+                )
+            }
+        }
+        if (editing) {
+            TextArea(
+                value = tab.doc,
+                onValueChange = { edited ->
+                    tab.doc = edited
+                    tab.docDirty = true
+                },
+                placeholder = "Markdown. Headings, lists, quotes, links and fenced code.",
+                bordered = false,
+                modifier = Modifier.fillMaxSize().padding(INSET),
+            )
+        } else {
+            val scroll = rememberScrollState()
+            Box(
+                Modifier.fillMaxSize()
+                    .pointerInput(tab.project) {
+                        detectTapGestures(onDoubleTap = { editing = true })
+                    }
+                    .verticalScroll(scroll),
+            ) {
+                MarkdownText(tab.doc, Modifier.fillMaxWidth().padding(INSET))
+            }
         }
     }
 }
@@ -312,6 +464,7 @@ private fun Git(
     git: GitStore,
     state: GitState,
     actions: ProjectGitActions,
+    sizes: ProjectPaneSizes,
 ) {
     if (!state.repo) {
         NoRepository(actions.initRepo)
@@ -364,8 +517,15 @@ private fun Git(
         return text
     }
 
+    // The changes column is dragged with a bare [VerticalSplitter] rather than a
+    // [SplitPane], because it is the pane that keeps its width and it is on the
+    // left: `SplitPane` always sizes its *second* pane, which is the right one.
+    // The same arrangement — and the same reason — as the collections tree in
+    // the view that hosts this. The history/commit split below is a `SplitPane`,
+    // where the sized pane is on the right and it fits.
     Row(Modifier.fillMaxSize()) {
         ChangesSidebar(
+            modifier = Modifier.width(sizes.gitSidebarWidth),
             state = state,
             changes = changes,
             message = message,
@@ -396,6 +556,7 @@ private fun Git(
                 }
             },
         )
+        VerticalSplitter { delta -> sizes.onGitSidebarResize(delta) }
         History(
             history = history,
             loading = loading,
@@ -404,6 +565,8 @@ private fun Git(
             canResync = state.hasRemote && !state.detached,
             onSelect = { commit -> selected = if (selected?.id == commit.id) null else commit },
             actions = actions,
+            detailWidth = sizes.gitDetailWidth,
+            onDetailResize = sizes.onGitDetailResize,
             modifier = Modifier.weight(1f),
         )
     }
@@ -464,6 +627,7 @@ private fun NoRepository(onInit: () -> Unit) {
  */
 @Composable
 private fun ChangesSidebar(
+    modifier: Modifier,
     state: GitState,
     changes: List<FileChange>,
     message: String,
@@ -478,7 +642,7 @@ private fun ChangesSidebar(
     val ready = message.isNotBlank() && picked.isNotEmpty()
     val canPush = state.hasRemote && !state.detached
 
-    Column(Modifier.width(SIDEBAR).fillMaxHeight().rightBorder(P.line)) {
+    Column(modifier.fillMaxHeight()) {
         // Above the branch, and only until there is a remote. A project with
         // nowhere to push has its branch glyph greyed and its Commit and Push
         // button dead, so without this the panel showed the problem in two
@@ -710,6 +874,8 @@ private fun History(
     canResync: Boolean,
     onSelect: (CommitEntry) -> Unit,
     actions: ProjectGitActions,
+    detailWidth: Dp,
+    onDetailResize: (Dp) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Column(modifier.fillMaxHeight()) {
@@ -719,26 +885,31 @@ private fun History(
             // that acts on the log as a whole rather than on a commit in it.
             GhostButton("Re-sync", enabled = canResync, onClick = actions.resync)
         }
-        Row(Modifier.fillMaxSize()) {
-            Column(
-                Modifier.weight(1f).fillMaxHeight().verticalScroll(rememberScrollState()),
-            ) {
-                if (history.isEmpty()) {
-                    EmptyState(if (loading) "Reading history..." else "No commits yet.", centred = true)
+        // A null second pane draws neither the column nor the grip, which is
+        // exactly the rule this had already: an empty third column standing
+        // there permanently would take a third of the pane to say nothing, and
+        // a grip that resized nothing would be a control that lies.
+        SplitPane(
+            horizontal = true,
+            secondSize = detailWidth,
+            onResize = onDetailResize,
+            second = selected?.let { commit -> { paneModifier -> CommitFiles(commit, files, paneModifier) } },
+            first = { paneModifier ->
+                Column(paneModifier.verticalScroll(rememberScrollState())) {
+                    if (history.isEmpty()) {
+                        EmptyState(if (loading) "Reading history..." else "No commits yet.", centred = true)
+                    }
+                    history.forEach { commit ->
+                        CommitRow(
+                            commit = commit,
+                            selected = commit.id == selected?.id,
+                            onClick = { onSelect(commit) },
+                            onRestore = { actions.restoreTo(commit) },
+                        )
+                    }
                 }
-                history.forEach { commit ->
-                    CommitRow(
-                        commit = commit,
-                        selected = commit.id == selected?.id,
-                        onClick = { onSelect(commit) },
-                        onRestore = { actions.restoreTo(commit) },
-                    )
-                }
-            }
-            // Only once something is selected: an empty third column standing
-            // there permanently would take a third of the pane to say nothing.
-            selected?.let { commit -> CommitFiles(commit, files) }
-        }
+            },
+        )
     }
 }
 
@@ -750,8 +921,8 @@ private fun History(
  * commit instead of of right now.
  */
 @Composable
-private fun CommitFiles(commit: CommitEntry, files: List<FileChange>) {
-    Column(Modifier.width(DETAIL).fillMaxHeight().leftBorder(P.line)) {
+private fun CommitFiles(commit: CommitEntry, files: List<FileChange>, modifier: Modifier = Modifier) {
+    Column(modifier.fillMaxHeight()) {
         PaneHeader(title = commit.short) {
             Spacer(Modifier.weight(1f))
             PzText(files.size.toString(), color = P.faint, style = Typo.caption, family = P.Mono)
@@ -890,8 +1061,12 @@ private fun InfoRow(
 
 private val HEADER_PAD = 6.dp
 
-/** The changes column. Wide enough for a file name and its state, no wider. */
-private val SIDEBAR = 260.dp
+/**
+ * The documentation header, fixed so that reading and editing are the same
+ * strip. Tall enough for the buttons editing puts in it, which are taller than
+ * the [PANE_HEADER_HEIGHT] a strip of text sits at.
+ */
+private val DOC_HEADER = 36.dp
 
 /** Room for a subject line and a short body before the box has to scroll. */
 private val MESSAGE_HEIGHT = 72.dp
@@ -914,9 +1089,6 @@ private val CardShape = RoundedCornerShape(8.dp)
  * holds, so the row does not change size when it appears.
  */
 private val COMMIT_ROW = 32.dp
-
-/** The selected commit's file list. Names, not paths, so it needs less than the sidebar. */
-private val DETAIL = 240.dp
 
 /** Enough for a name; a long one truncates rather than crowding the subject. */
 private val AUTHOR_WIDTH = 120.dp

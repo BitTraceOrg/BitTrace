@@ -21,7 +21,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
@@ -40,6 +39,7 @@ import org.bittrace.ui.layouts.inspector.components.matches
 import org.bittrace.ui.layouts.inspector.components.originOf
 import org.bittrace.ui.layouts.home.HomeView
 import org.bittrace.ui.components.ImportRequestDialog
+import org.bittrace.ui.layouts.forge.components.ImportProjectDialog
 import org.bittrace.ui.components.NerdStats
 import org.bittrace.tools.DiffTool
 import org.bittrace.tools.Tool
@@ -79,6 +79,7 @@ import org.bittrace.session.HarImporter
 import org.bittrace.ui.BitTraceTheme
 import org.bittrace.ui.FileDialogs
 import org.bittrace.ui.P
+import org.bittrace.ui.appIcon
 import org.bittrace.ui.components.PzText
 import org.bittrace.ui.bottomBorder
 import org.jetbrains.jewel.window.DecoratedWindow
@@ -147,10 +148,7 @@ fun main() = application {
             onCloseRequest = { service.stop(); exitApplication() },
             title = "BitTrace",
             state = windowState,
-            // The packaged app gets its icon from the installer; a `gradlew run`
-            // has no installer, so without this the window and its task-bar
-            // entry come up as the default Java cup.
-            icon = painterResource("icon.png"),
+            icon = appIcon(),
         ) {
             App(
                 store, service, settings, themeManager, logs, formatters, importers, collectionActions, flowActions, activity,
@@ -219,6 +217,7 @@ private fun DecoratedWindowScope.App(
     }
 
     var importOpen by remember { mutableStateOf(false) }
+    var importProjectOpen by remember { mutableStateOf(false) }
     val collections = remember { CollectionStore() }
     // Git lives as long as the app does: the SSH factory owns a thread pool, so
     // one per view build would leak one per visit to the API client.
@@ -313,6 +312,13 @@ private fun DecoratedWindowScope.App(
                 },
                 onClearSelection = { selectedId = null },
                 onNewSession = { service.clear() },
+                // The same call the entry above makes, and deliberately so:
+                // clearing the captured flows is clearing the session, and two
+                // routes to it that did subtly different things would be worse
+                // than two names for one.
+                onClearRequests = if (sessionBusy || store.size == 0) null else {
+                    { service.clear() }
+                },
                 // Null until the Forge says a collection is selected, which is
                 // what greys both entries out.
                 onNewRequest = forgeSelection.collection?.let {
@@ -333,6 +339,7 @@ private fun DecoratedWindowScope.App(
                     collections.createNamedCollection()
                         .onFailure { logs.add("warn", "api", it.message ?: "Could not create a collection.") }
                 },
+                onImportProject = { nav = "api"; importProjectOpen = true },
                 // Walking the folder touches the disk, so it stays off the EDT.
                 onRefreshProjects = {
                     thread(isDaemon = true, name = "collections-reload") { collections.reload() }
@@ -475,6 +482,33 @@ private fun DecoratedWindowScope.App(
             }
         }
 
+        if (importProjectOpen) {
+            ImportProjectDialog(onDismiss = { importProjectOpen = false }) { url ->
+                importProjectOpen = false
+                // The folder is picked here, before the clone, because the store
+                // owns what a free project name is — and because git needs an
+                // empty directory to write into, not one already made for it.
+                collections.freeProjectPath(repoNameOf(url))
+                    .onFailure { logs.add("error", "api", it.message ?: "Could not import the project.") }
+                    .onSuccess { target ->
+                        // Through the store's own runner, so the clone reports
+                        // and refreshes like every other git operation, and the
+                        // status strip says which project is busy while a large
+                        // repository comes down.
+                        git.run(target, "Import") {
+                            clone(url, target).map {
+                                // The walk is what turns a folder into a project
+                                // in the tree, and it has to happen before this
+                                // returns or the notice would name something not
+                                // yet on screen.
+                                collections.reload()
+                                "Imported ${target.fileName} from $url."
+                            }
+                        }
+                    }
+            }
+        }
+
         if (importOpen) {
             ImportRequestDialog(
                 importers = importers,
@@ -591,10 +625,13 @@ private fun appMenus(
     onToggleLayout: () -> Unit,
     onClearSelection: () -> Unit,
     onNewSession: () -> Unit,
+    /** Null when there is nothing captured to clear, which greys the entry out. */
+    onClearRequests: (() -> Unit)?,
     onNewRequest: (() -> Unit)?,
     onImportRequest: (() -> Unit)?,
     onNewProject: () -> Unit,
     onNewCollection: () -> Unit,
+    onImportProject: () -> Unit,
     onRefreshProjects: () -> Unit,
     onClearHistory: (() -> Unit)?,
     onEditFlow: (() -> Unit)?,
@@ -617,6 +654,21 @@ private fun appMenus(
                 onClick = onImportSession,
             ),
             MenuAction("Export HAR…", hint = if (busy) "busy" else "", onClick = onExportSession),
+            // Below the rule with nothing under it, because it is the entry
+            // here that destroys something — the same placement `Clear request
+            // history` has in Forge. It says what it does, where `New session`
+            // says what it leaves you with; both empty the grid, and which one
+            // you reach for depends on which of those you had in mind.
+            //
+            // Disabled with an empty grid rather than hidden: an entry that
+            // comes and goes is one you have to look for, and "nothing to
+            // clear" is worth saying once.
+            MenuAction(
+                "Clear all requests",
+                hint = if (busy) "busy" else if (onClearRequests == null) "nothing captured" else "",
+                separatorBefore = true,
+                onClick = onClearRequests?.let { clear -> { clear(); onClearSelection() } },
+            ),
         ),
     ),
     Menu(
@@ -630,6 +682,10 @@ private fun appMenus(
             // side says without the extra click.
             MenuAction("New project", separatorBefore = true, onClick = onNewProject),
             MenuAction("New collection", onClick = onNewCollection),
+            // With the two that make an empty one, because from where you are
+            // standing it is the third way to end up with a project — the
+            // difference is only where the contents come from.
+            MenuAction("Import project…", hint = "from git", onClick = onImportProject),
             MenuAction("Refresh from disk", onClick = onRefreshProjects),
             // Keeps the rule it had inside the submenu. It is the one entry
             // here that destroys something, and the divider is what stops it
@@ -724,6 +780,22 @@ private fun appMenus(
         ),
     ),
 )
+
+/**
+ * The project name a clone URL implies.
+ *
+ * The last path segment without its `.git`, which is what every git client
+ * calls the folder it makes — so a repository somebody knows as `payments-api`
+ * does not arrive as `payments-api.git`, and the tree reads the way the forge
+ * page they copied the URL from did. Anything unrecognisable falls back to a
+ * name the tree can show and they can rename.
+ */
+internal fun repoNameOf(url: String): String = url.trim()
+    .removeSuffix("/")
+    .substringAfterLast('/')
+    .substringAfterLast(':')
+    .removeSuffix(".git")
+    .ifBlank { "Imported project" }
 
 /**
  * How long typing settles before a body scan runs.

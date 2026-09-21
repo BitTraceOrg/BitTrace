@@ -272,7 +272,6 @@ fun AddressBar(host: String, port: Int, running: Boolean) {
                 softWrap = false,
             )
             Spacer(Modifier.width(7.dp))
-            PzText("https://", color = P.faint, style = Typo.label)
             PzText(host, color = P.text, style = Typo.label)
             PzText(":", color = P.faint, style = Typo.label)
             PzText(port.toString(), color = P.accent, style = Typo.label, weight = FontWeight.Medium)

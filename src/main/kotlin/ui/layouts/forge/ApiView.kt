@@ -19,6 +19,7 @@ import org.bittrace.ui.layouts.forge.components.RequestSettingsTab
 import org.bittrace.ui.layouts.forge.components.TreeMenuItem
 import org.bittrace.ui.layouts.forge.components.UnsavedChangesDialog
 import org.bittrace.ui.layouts.forge.components.ProjectPane
+import org.bittrace.ui.layouts.forge.components.ProjectPaneSizes
 import org.bittrace.ui.layouts.forge.components.ProjectGitActions
 import org.bittrace.ui.layouts.forge.components.branchTint
 import org.bittrace.ui.layouts.forge.components.runFetch
@@ -41,6 +42,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -82,6 +84,7 @@ import org.bittrace.plugin.collection.CollectionTargetKind
 import kotlinx.coroutines.withContext
 import org.bittrace.api.ApiClientState
 import org.bittrace.api.RequestTab
+import org.bittrace.api.ProjectDocs
 import org.bittrace.api.ProjectVariables
 import org.bittrace.api.VariablesNode
 import org.bittrace.api.ProjectTab
@@ -129,6 +132,7 @@ import org.jetbrains.jewel.ui.component.IconActionButton
 import org.jetbrains.jewel.ui.component.OutlinedSplitButton
 import org.jetbrains.jewel.ui.component.TabData
 import org.jetbrains.jewel.ui.component.TabStrip
+import org.jetbrains.jewel.ui.component.Icon
 import org.jetbrains.jewel.ui.icons.AllIconsKeys
 import org.jetbrains.jewel.ui.theme.editorTabStyle
 
@@ -281,7 +285,7 @@ fun ApiView(
             .onSuccess {
                 if (state.openPath == node.path) state.open(state.request, null)
                 if (selectedPath == node.path) selectedPath = null
-                report("Moved '${node.name}' to the .trash folder.", "info")
+                report("Deleted '${node.name}'.", "info")
             }
             .onFailure { report(it.message ?: "Delete failed.") }
     }
@@ -345,6 +349,9 @@ fun ApiView(
     val treeWidth = settings.settings.apiTreeWidthDp.dp
     val responseWidth = settings.settings.apiResponseWidthDp.dp
     val responseHeight = settings.settings.apiResponseHeightDp.dp
+    val docsWidth = settings.settings.apiProjectDocsWidthDp.dp
+    val gitSidebarWidth = settings.settings.apiGitSidebarWidthDp.dp
+    val gitDetailWidth = settings.settings.apiGitDetailWidthDp.dp
     // The same setting the traffic inspector follows: horizontal sits the panes
     // side by side, vertical stacks them.
     val horizontal = settings.settings.horizontalLayout
@@ -487,6 +494,10 @@ fun ApiView(
             // exhaustive over the sealed tab so a third kind fails here rather
             // than silently rendering a request builder over it.
             val open = state.active
+            if (open == null) {
+                NothingOpen()
+                return@Column
+            }
             if (open is ProjectTab) {
                 val node = collections.tree.firstOrNull { it.path == open.project }
                 ProjectPane(
@@ -523,6 +534,38 @@ fun ApiView(
                         // The same runners the menu items call, not copies.
                         fetch = { runFetch(open.project, git) },
                         pull = { runPull(open.project, git, prompts) },
+                    ),
+                    sizes = ProjectPaneSizes(
+                        docWidth = docsWidth,
+                        // The same clamp shape the response pane uses: wide
+                        // enough for prose, never wide enough to leave the
+                        // readouts beside it a column of ellipses.
+                        onDocResize = { delta ->
+                            settings.update {
+                                it.copy(
+                                    apiProjectDocsWidthDp =
+                                        (it.apiProjectDocsWidthDp + delta.value).coerceIn(320f, 1400f),
+                                )
+                            }
+                        },
+                        gitSidebarWidth = gitSidebarWidth,
+                        onGitSidebarResize = { delta ->
+                            settings.update {
+                                it.copy(
+                                    apiGitSidebarWidthDp =
+                                        (it.apiGitSidebarWidthDp + delta.value).coerceIn(180f, 560f),
+                                )
+                            }
+                        },
+                        gitDetailWidth = gitDetailWidth,
+                        onGitDetailResize = { delta ->
+                            settings.update {
+                                it.copy(
+                                    apiGitDetailWidthDp =
+                                        (it.apiGitDetailWidthDp + delta.value).coerceIn(160f, 520f),
+                                )
+                            }
+                        },
                     ),
                 ) { report(saveProject(open)) }
                 return@Column
@@ -958,6 +1001,71 @@ private fun RequestTabs(state: ApiClientState, onClose: (EditorTab) -> Unit) {
 }
 
 /**
+ * What the pane shows with no tab open.
+ *
+ * There is such a state now: the client no longer opens a blank draft to start
+ * with, nor conjures one when the last tab closes. A blank request looked like
+ * work in progress that nobody had started, and it made the strip lie about
+ * what was open — so the pane says what it is instead, and says what opens
+ * something.
+ *
+ * Deliberately not a button: everything that opens a request needs somewhere to
+ * put it, and a control here would have to be disabled most of the time to say
+ * so. The two routes that do work are named instead, in the order you would
+ * reach for them.
+ */
+@Composable
+private fun NothingOpen() {
+    Box(Modifier.fillMaxSize().background(P.bg), contentAlignment = Alignment.Center) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Icon(
+                key = AllIconsKeys.FileTypes.Http,
+                contentDescription = null,
+                tint = P.faint,
+                modifier = Modifier.size(28.dp),
+            )
+            Spacer(Modifier.height(12.dp))
+            PzText("Nothing open", color = P.dim, style = Typo.h2, family = P.Ui)
+            Spacer(Modifier.height(4.dp))
+            // The status line an HTTP client would send for this exact state,
+            // in the family it shows payload in. It is a joke, but it is also
+            // the correct answer.
+            PzText("204 No Content", color = P.key, style = Typo.caption, family = P.Mono)
+            Spacer(Modifier.height(10.dp))
+            PzText(
+                "Open a request from the collections on the left, or",
+                color = P.faint, style = Typo.caption, family = P.Ui,
+            )
+            PzText(
+                "start one with New request, once a collection is selected.",
+                color = P.faint, style = Typo.caption, family = P.Ui,
+            )
+            Spacer(Modifier.height(14.dp))
+            // Remembered, not re-rolled: a line that changed on every
+            // recomposition would be a flicker rather than a joke.
+            PzText(remember { IDLE_LINES.random() }, color = P.faint, style = Typo.micro, family = P.Ui)
+        }
+    }
+}
+
+/**
+ * One of these sits at the bottom of the holding panel, chosen when the panel
+ * appears.
+ *
+ * An empty pane is the one place in the app with room for a line that is not
+ * doing a job, and the panel above it has already said everything that is.
+ */
+private val IDLE_LINES = listOf(
+    "These are not the endpoints you are looking for.",
+    "It is dangerous to go alone. Take a collection.",
+    "I would tell you a UDP joke, but you might not get it.",
+    "The cake is a lie. The timeout is real.",
+    "Somewhere, a packet is waiting for you to press Send.",
+    "42 requests walk into a bar. None of them are open.",
+    "It has been zero days since the last 500.",
+)
+
+/**
  * Every distinct request that has been sent, newest first.
  *
  * Flat and chronological on purpose — history answers "what did I just run?",
@@ -1370,16 +1478,28 @@ private fun saveAll(state: ApiClientState, collections: CollectionStore, project
 }
 
 /**
- * Writes a project's variables table.
+ * Writes a project's two editable files: its variables table and its
+ * documentation page.
+ *
+ * Both, because one Save has to mean the tab rather than whichever section it
+ * was pressed in — `saveAll` and the close prompt see a tab and nothing finer,
+ * and a save that left half the tab dirty would put the guard back on screen
+ * the moment it returned.
+ *
+ * The page is only written when it has been edited. It is a git-tracked file,
+ * and rewriting it on every variables save would put it in every diff that
+ * followed, saying nothing.
  *
  * Deliberately not routed through `CollectionStore.save`, which is shaped for a
- * request and now refuses any path that is not one — a project's variables are
- * a different file with different rules, and pretending otherwise is how a
- * placeholder ends up written over something that matters.
+ * request and now refuses any path that is not one — these are different files
+ * with different rules, and pretending otherwise is how a placeholder ends up
+ * written over something that matters.
  */
 private fun saveProject(tab: ProjectTab): String? =
-    runCatching { ProjectVariables.write(tab.project, tab.rows) }
-        .fold({ tab.dirty = false; null }, { it.message ?: "Save failed." })
+    runCatching {
+        ProjectVariables.write(tab.project, tab.rows)
+        if (tab.docDirty) ProjectDocs.write(tab.project, tab.doc)
+    }.fold({ tab.dirty = false; null }, { it.message ?: "Save failed." })
 
 private fun save(state: ApiClientState, collections: CollectionStore, selectedPath: Path?): String? {
     val existing = state.openPath

@@ -1,7 +1,6 @@
 package org.bittrace.tools
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -12,9 +11,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -120,7 +118,11 @@ fun DiffTool(
         val diff = remember(leftText, rightText) {
             diffLines(leftText.lines(), rightText.lines())
         }
-        DiffView(diff)
+        // The left flow's own media type picks the language for both panes:
+        // they are two captures of one endpoint, and highlighting the halves of
+        // a comparison by two different languages would be a difference the
+        // diff did not find.
+        DiffView(diff, mimeOf(left, side))
     }
 }
 
@@ -199,16 +201,24 @@ private fun mimeOf(row: TrafficRow, side: BodySide): String {
 }
 
 /**
- * The diff itself: two gutters, two columns, one row per aligned line.
+ * The diff itself: two editors, side by side, one line per aligned row.
  *
- * Both sides share one horizontal scroll, because reading a diff means reading
- * across it — two independent scrolls would let the halves of one change drift
- * apart, which is the one thing this view exists to prevent.
+ * Both sides are [DiffPane]s — the app's own KodeMirror surface — rather than
+ * two columns of text, so what you compare here is highlighted, searchable and
+ * foldable the way the same body is in the inspector. The view's own job is
+ * what an editor cannot do for itself: keeping the two level.
+ *
+ * One scroll, outside both, is what does that. The panes are laid out at their
+ * documents' full height inside it, so the rows cannot drift apart the way two
+ * independently scrolling editors would — and drifting apart is the one thing
+ * this view exists to prevent. It is the same trade `CodeEditor` makes for its
+ * scrollbar, with the same ceiling, which is why [MAX_ROWS] exists.
  */
 @Composable
-internal fun DiffView(diff: DiffResult) {
-    val hScroll = rememberScrollState()
-    val listState = rememberLazyListState()
+internal fun DiffView(diff: DiffResult, contentType: String = "") {
+    val vertical = rememberScrollState()
+    val shown = remember(diff) { diff.rows.take(MAX_ROWS) }
+    val clipped = diff.rows.size > shown.size
     val added = diff.rows.count { it.kind == DiffKind.ADDED }
     val removed = diff.rows.count { it.kind == DiffKind.REMOVED }
     val changed = diff.rows.count { it.kind == DiffKind.CHANGED }
@@ -231,15 +241,26 @@ internal fun DiffView(diff: DiffResult) {
                     color = P.warn, style = Typo.caption, family = P.Ui,
                 )
             }
+            if (clipped) {
+                Spacer(Modifier.width(12.dp))
+                PzText(
+                    "showing the first ${shown.size} rows of ${diff.rows.size}",
+                    color = P.warn, style = Typo.caption, family = P.Ui,
+                )
+            }
         }
 
         Box(Modifier.weight(1f).fillMaxWidth()) {
-            LazyColumn(Modifier.fillMaxSize().background(P.bg), state = listState) {
-                items(diff.rows.size) { index ->
-                    DiffLine(diff.rows[index], hScroll)
+            Box(Modifier.fillMaxSize().background(P.bg).verticalScroll(vertical)) {
+                Row(Modifier.fillMaxWidth()) {
+                    DiffPane(
+                        shown, DiffSide.LEFT, contentType,
+                        Modifier.weight(1f).rightBorder(P.line),
+                    )
+                    DiffPane(shown, DiffSide.RIGHT, contentType, Modifier.weight(1f))
                 }
             }
-            VScrollbar(listState, Modifier.align(Alignment.CenterEnd).fillMaxHeight())
+            VScrollbar(vertical, Modifier.align(Alignment.CenterEnd).fillMaxHeight())
         }
     }
 }
@@ -249,55 +270,23 @@ private fun Count(text: String, color: Color) =
     PzText(text, color = color, style = Typo.caption, family = P.Ui, weight = FontWeight.SemiBold)
 
 @Composable
-private fun DiffLine(row: DiffRow, hScroll: androidx.compose.foundation.ScrollState) {
-    Row(Modifier.fillMaxWidth()) {
-        Half(row.leftNumber, row.left, washFor(row.kind, left = true), hScroll, Modifier.weight(1f))
-        Half(row.rightNumber, row.right, washFor(row.kind, left = false), hScroll, Modifier.weight(1f))
-    }
-}
-
-@Composable
-private fun Half(
-    number: Int?,
-    text: String?,
-    wash: Color,
-    hScroll: androidx.compose.foundation.ScrollState,
-    modifier: Modifier,
-) {
-    Row(modifier.background(wash)) {
-        Box(
-            Modifier.width(48.dp).rightBorder(P.line2).padding(end = 6.dp),
-            contentAlignment = Alignment.CenterEnd,
-        ) {
-            // A side with no line here is blank rather than zero: the gutters
-            // count their own files, so a number would claim a line that the
-            // other file has and this one does not.
-            if (number != null) {
-                PzText("$number", color = P.faint, style = Typo.label, softWrap = false)
-            }
-        }
-        Box(Modifier.weight(1f).horizontalScroll(hScroll).padding(horizontal = 6.dp)) {
-            PzText(text.orEmpty(), color = P.text, style = Typo.label, softWrap = false, maxLines = 1)
-        }
-    }
-}
-
-/** A wash, not a border: a changed line is a region, and a rule would split it. */
-private fun washFor(kind: DiffKind, left: Boolean): Color = when (kind) {
-    DiffKind.SAME -> Color.Transparent
-    DiffKind.CHANGED -> P.warn.copy(alpha = WASH)
-    DiffKind.REMOVED -> if (left) P.err.copy(alpha = WASH) else Color.Transparent
-    DiffKind.ADDED -> if (left) Color.Transparent else P.ok.copy(alpha = WASH)
-}
-
-@Composable
 private fun Empty(text: String) {
     Box(Modifier.fillMaxSize().background(P.bg), contentAlignment = Alignment.Center) {
         PzText(text, color = P.faint, style = Typo.label, family = P.Ui)
     }
 }
 
-private const val WASH = 0.14f
+/**
+ * How many aligned rows the view will lay out.
+ *
+ * Both panes are measured at their documents' full height so that one scroll
+ * governs both, and `CodeEditor` records where that stops working: past roughly
+ * ten thousand laid-out lines the editor runs out of heap, and past forty
+ * thousand `Constraints` cannot represent the height at all. Two documents
+ * share that budget here, so the cap is the same 2,000 its scrollbar uses, and
+ * the counts bar says when a diff has been clipped to it.
+ */
+private const val MAX_ROWS = 2_000
 
 /** How many recent flows the pickers offer. */
 private const val CANDIDATE_LIMIT = 200

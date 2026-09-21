@@ -63,6 +63,12 @@ data class Settings(
     val apiResponseWidthDp: Float = 520f,
     /** Height of the API client's response pane when the layout is vertical, in dp. */
     val apiResponseHeightDp: Float = 320f,
+    /** Width of the documentation panel on a project's Overview, in dp. */
+    val apiProjectDocsWidthDp: Float = 680f,
+    /** Width of the changes column on a project's Git panel, in dp. */
+    val apiGitSidebarWidthDp: Float = 260f,
+    /** Width of the selected commit's file list on a project's Git panel, in dp. */
+    val apiGitDetailWidthDp: Float = 240f,
 
     // --- API client defaults -------------------------------------------------
     //

@@ -14,6 +14,13 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.Composable
+import kotlinx.coroutines.flow.filter
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -37,10 +44,15 @@ import org.bittrace.ui.topBorder
  * Body tab on a WebSocket row is always empty.
  *
  * Lazy, and it has to be: a feed can push for as long as it is left open, and
- * the transcript is capped in the thousands rather than the dozens. It does not
- * auto-scroll. A transcript is read by scrolling back through it, and a list
- * that jumps to the newest message every time one lands cannot be read at all
- * while the connection is busy.
+ * the transcript is capped in the thousands rather than the dozens.
+ *
+ * It follows the tail, but only while you are already at it. A list that jumps
+ * to the newest message whatever you were doing cannot be read at all while the
+ * connection is busy; one that never moves makes watching a live feed a matter
+ * of dragging the scrollbar every second. Following until the reader scrolls
+ * away, and resuming when they come back, is the behaviour that serves both —
+ * and the reader's own scrolling is the only thing that changes the mode, so it
+ * is never decided for them.
  */
 @Composable
 fun WebSocketTranscript(row: TrafficRow) {
@@ -65,6 +77,32 @@ fun WebSocketTranscript(row: TrafficRow) {
         }
 
         val state = rememberLazyListState()
+        // Whether new messages pull the view along. Keyed on the flow, so
+        // opening another socket starts at its tail rather than inheriting
+        // wherever the last one was left.
+        var following by remember(row.id) { mutableStateOf(true) }
+
+        // Decided when a scroll *settles*, not while it runs, and from the
+        // reader's own gesture rather than from where the list happens to be
+        // after an append. Reading the position at append time would be wrong
+        // in exactly the case that matters: a burst of messages lands, the last
+        // visible item is suddenly several from the end, and following would
+        // switch itself off on the busiest feeds. The programmatic scroll below
+        // settles at the bottom, so it leaves the mode alone.
+        LaunchedEffect(state) {
+            snapshotFlow { state.isScrollInProgress }
+                .filter { inProgress -> !inProgress }
+                .collect {
+                    val info = state.layoutInfo
+                    val last = info.visibleItemsInfo.lastOrNull()
+                    following = last == null || last.index >= info.totalItemsCount - 1
+                }
+        }
+
+        LaunchedEffect(messages.size, following) {
+            if (following && messages.isNotEmpty()) state.scrollToItem(messages.size - 1)
+        }
+
         Box(Modifier.weight(1f).fillMaxWidth()) {
             LazyColumn(Modifier.fillMaxSize(), state = state) {
                 items(messages.size) { index -> MessageRow(messages[index]) }

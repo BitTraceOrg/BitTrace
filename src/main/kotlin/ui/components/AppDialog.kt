@@ -1,8 +1,8 @@
 package org.bittrace.ui.components
 
 import org.bittrace.ui.P
+import org.bittrace.ui.appIcon
 import org.bittrace.ui.Typo
-import org.bittrace.ui.border1
 import org.bittrace.ui.bottomBorder
 import org.bittrace.ui.topBorder
 import androidx.compose.ui.focus.FocusRequester
@@ -10,7 +10,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
@@ -18,34 +17,32 @@ import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.window.WindowDraggableArea
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.DialogWindow
-import androidx.compose.ui.window.DialogWindowScope
-import androidx.compose.ui.window.rememberDialogState
-import org.bittrace.plugin.ThemeManager
-import org.bittrace.ui.BitTraceTheme
-import org.jetbrains.jewel.intui.standalone.theme.IntUiTheme
-import org.jetbrains.jewel.ui.component.IconActionButton
-import org.jetbrains.jewel.ui.icons.AllIconsKeys
+import androidx.compose.ui.window.rememberWindowState
 import org.jetbrains.jewel.window.DecoratedWindow
+import org.jetbrains.jewel.window.TitleBar
 
 /**
- * The app's own window frame, for the dialogs that do not use the platform's.
+ * A dialog, wearing the same frame as the main window and the tool windows.
  *
- * Undecorated, because every other title bar in BitTrace is drawn rather than
- * borrowed and a dialog suddenly wearing the OS's would read as belonging to
- * another program. What that costs is the drag, the border and the close
- * button — which is exactly what this supplies, once rather than per dialog.
+ * `DecoratedWindow` rather than an undecorated `DialogWindow` with a title
+ * strip drawn by hand. The frame ends up looking the same either way, but
+ * everything around it does not: minimise, maximise, edge resize, Windows snap
+ * layouts and double-click-to-maximise arrive from the platform instead of from
+ * a drag area and one close button, and the strip is the app's own `TitleBar`
+ * rather than a second thing that had to be kept looking like it.
+ *
+ * What a `DialogWindow` gave and this does not is ownership: a dialog sat above
+ * the window that opened it and stayed out of the taskbar. [alwaysOnTop]
+ * replaces the first half, because a dialog lost behind the main window is one
+ * somebody will think has vanished. The second half is simply gone — a dialog
+ * now appears in the taskbar, as the tool windows already do.
  *
  * [content] fills the space between the title strip and the footer; [footer] is
  * the button row along the bottom, laid out in a `RowScope` so the caller puts
@@ -61,17 +58,34 @@ fun AppDialog(
     resizable: Boolean = true,
     /** The body surface: [P.panel] for a panel, [P.bg] for one holding an editor. */
     surface: Color = P.bg,
+    /** False for a dialog that may sensibly be left open behind the window. */
+    alwaysOnTop: Boolean = true,
     footer: (@Composable RowScope.() -> Unit)? = null,
     content: @Composable ColumnScope.() -> Unit,
 ) {
-    DialogWindow(
+    DecoratedWindow(
         onCloseRequest = onClose,
-        state = rememberDialogState(size = size),
+        state = rememberWindowState(size = size),
         resizable = resizable,
-        title = title
+        alwaysOnTop = alwaysOnTop,
+        title = title,
+        // A decorated window carries a task-bar entry of its own, which a
+        // `DialogWindow` did not — so a dialog now needs the app's icon for the
+        // same reason the tool windows do.
+        icon = appIcon(),
     ) {
-        Column(Modifier.fillMaxSize().background(surface).border1(P.line)) {
-            content()
+        // The same strip the main window and the tool windows draw, holding the
+        // dialog's name where the main one holds a menu bar. Close, minimise
+        // and maximise are the platform's own, on the right, so nothing here
+        // draws one.
+        TitleBar(Modifier.bottomBorder(P.line)) {
+            PzText(title, color = P.dim, style = Typo.label, family = P.Ui, softWrap = false)
+        }
+        Column(Modifier.fillMaxSize().background(surface)) {
+            // Weighted, so the slack in a fixed-size dialog goes here rather
+            // than under the footer. Without it the buttons floated wherever
+            // the content ended and left a band of empty panel below them.
+            Column(Modifier.fillMaxWidth().weight(1f)) { content() }
 
             if (footer != null) {
                 Row(

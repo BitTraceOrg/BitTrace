@@ -93,9 +93,29 @@ class ProjectTab(
     override val id: Long,
     val project: java.nio.file.Path,
     rows: List<KeyValue>,
+    doc: String = "",
     section: ProjectSection = ProjectSection.Overview,
 ) : EditorTab {
     var rows by mutableStateOf(rows)
+
+    /**
+     * The documentation page's text, held on the tab rather than in the panel
+     * that draws it.
+     *
+     * An edit in progress is work the guard has to be able to see: a draft left
+     * in the composition would be dropped by a branch switch, and saved by
+     * nothing, because `saveAll` only ever sees the tab.
+     */
+    var doc by mutableStateOf(doc)
+
+    /**
+     * Whether [doc] differs from the file.
+     *
+     * Tracked apart from the table's own flag so that saving the variables does
+     * not rewrite a documentation file nobody touched: a git-tracked file that
+     * changes on every unrelated save is noise in every diff after it.
+     */
+    var docDirty by mutableStateOf(false)
 
     /**
      * Held on the tab, not in the pane's composition: switching to another tab
@@ -103,7 +123,23 @@ class ProjectTab(
      * you were last on is the one you are working in.
      */
     var section by mutableStateOf(section)
-    override var dirty by mutableStateOf(false)
+
+    private var rowsDirty by mutableStateOf(false)
+
+    /**
+     * Either half of the tab having unsaved work.
+     *
+     * Computed rather than stored, because two editable things now share one
+     * tab and everything outside it — the strip's dot, the close prompt, the
+     * checkout guard, `saveAll` — asks this one question. Clearing it is what a
+     * completed save says, and a save writes both halves, so it clears both.
+     */
+    override var dirty: Boolean
+        get() = rowsDirty || docDirty
+        set(value) {
+            rowsDirty = value
+            if (!value) docDirty = false
+        }
 
     /** The folder's own name — "Variables" told you nothing when two were open. */
     val projectName: String get() = project.fileName?.toString() ?: project.toString()
@@ -215,13 +251,21 @@ class ApiClientState(
 
     private var nextTabId = 1L
 
-    /** Open requests, in tab order. Never empty: closing the last opens a blank one. */
-    val tabs = mutableStateListOf<EditorTab>(RequestTab(nextTabId++, ApiRequest(), null))
+    /**
+     * Open requests, in tab order. Empty is a state, not an accident.
+     *
+     * The client used to open a blank draft to start with, and to conjure
+     * another whenever the last tab closed. It meant there was never a moment
+     * where nothing was open — and so never a moment where the pane could say
+     * what to do next. It also meant `New request` was doing two jobs: the one
+     * you asked for, and the one that appeared behind you.
+     */
+    val tabs = mutableStateListOf<EditorTab>()
 
-    var activeId by mutableStateOf(tabs.first().id)
+    var activeId by mutableStateOf(NO_TAB)
         private set
 
-    /** The tab being edited. Null only in the instant between mutations. */
+    /** The tab being edited, or null when nothing is open. */
     val active: EditorTab? get() = tabs.firstOrNull { it.id == activeId }
 
     /**
@@ -464,6 +508,7 @@ class ApiClientState(
             nextTabId++,
             project,
             ProjectVariables.read(project),
+            ProjectDocs.read(project),
             section,
         )
         val blank = activeRequest?.takeIf {
@@ -498,14 +543,20 @@ class ApiClientState(
         activeId = tab.id
     }
 
-    /** Closes a tab, cancelling anything it had in flight. */
+    /**
+     * Closes a tab, cancelling anything it had in flight.
+     *
+     * Closing the last one leaves nothing open, which the view draws as the
+     * holding panel. Focus falls to the tab that took this one's place, or to
+     * the one before it when this was the last in the strip.
+     */
     fun close(tab: EditorTab) {
         (tab as? RequestTab)?.inFlight?.cancel()
         val index = tabs.indexOf(tab)
         if (index < 0) return
         tabs.removeAt(index)
-        if (tabs.isEmpty()) tabs.add(RequestTab(nextTabId++, ApiRequest(), null))
-        if (activeId == tab.id) activeId = tabs[index.coerceAtMost(tabs.lastIndex)].id
+        if (activeId != tab.id) return
+        activeId = tabs.getOrNull(index.coerceAtMost(tabs.lastIndex))?.id ?: NO_TAB
     }
 
     fun cancel() {
@@ -740,6 +791,12 @@ class ApiClientState(
     }
 
     private companion object {
+        /**
+         * The id no tab has, which is what "nothing is open" is spelled as.
+         * Ids start at 1, so zero cannot collide with a tab that exists.
+         */
+        const val NO_TAB = 0L
+
         /** Long enough for the frames to cross the EDT, short enough not to hang. */
         const val CORRELATION_TIMEOUT_MS = 2_000L
         const val CORRELATION_POLL_MS = 25L

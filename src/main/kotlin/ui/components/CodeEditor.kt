@@ -341,8 +341,13 @@ private fun withinScrollbarLimit(text: String): Boolean {
  *
  * Not [minimalSetup] plus additions: that bundle drops the gutter and folding,
  * which is a deliberately different view (see [CodeView]'s `plain`).
+ *
+ * Internal rather than private because the diff tool builds its own sessions —
+ * two of them, scrolling as one — and a viewer there that behaved differently
+ * from the viewer in the inspector would be the same mismatch this bundle
+ * exists to prevent.
  */
-private val readOnlySetup: Extension = extensionListOf(
+internal val readOnlySetup: Extension = extensionListOf(
     lineNumbers,
     highlightActiveLineGutter,
     highlightSpecialChars,

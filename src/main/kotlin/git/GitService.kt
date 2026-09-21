@@ -90,6 +90,41 @@ class GitService(
         }
     }
 
+    /**
+     * Clones [url] into [target], which must not already hold anything.
+     *
+     * A whole project arrives at once this way — collections, requests,
+     * variables and the documentation page — which is the shape the collections
+     * folder is in anyway, so nothing has to be imported afterwards: the next
+     * walk finds a project where there was none.
+     *
+     * A failed clone takes its half-written directory with it. JGit leaves the
+     * partial checkout behind, and a folder holding a `.git` and three of forty
+     * requests is worse than no folder at all — the tree would show it as a
+     * project and nothing would say it is unfinished.
+     *
+     * The token from Settings is offered the same way `fetch` offers it, so a
+     * private repository works if one is set. A public repository over HTTPS
+     * needs none, and asking for one would invent a requirement git does not
+     * have.
+     */
+    suspend fun clone(url: String, target: Path): Result<Unit> = guarded(target) {
+        if (Files.exists(target) && Files.list(target).use { it.findAny().isPresent }) {
+            throw GitFailure.Broken("${target.fileName} already exists.")
+        }
+        try {
+            Git.cloneRepository()
+                .setURI(url)
+                .setDirectory(target.toFile())
+                .setTransportConfigCallback(credentials.callbackFor(url))
+                .call()
+                .use { git -> writeRepoConfig(git.repository) }
+        } catch (failure: Throwable) {
+            runCatching { target.toFile().deleteRecursively() }
+            throw failure
+        }
+    }
+
     suspend fun state(project: Path): Result<GitState> = runIn(project, lock = false) { git ->
         val repository = git.repository
         val head = repository.resolve(Constants.HEAD)
@@ -713,9 +748,6 @@ class GitService(
         val IGNORE = """
             # The atomic-save temp files, which exist for microseconds.
             *.tmp
-
-            # Deleted requests, kept at the collections root rather than here.
-            .trash/
         """.trimIndent() + "\n"
     }
 }

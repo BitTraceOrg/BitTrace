@@ -35,6 +35,29 @@ class CollectionStoreTest {
 
     private fun load(): CollectionStore = CollectionStore(root).also { it.reload() }
 
+    /**
+     * The scaffold is laid when the collections folder does not exist yet, and
+     * only then — an emptied folder belongs to whoever emptied it.
+     */
+    @Test
+    fun `a collections folder that does not exist yet is seeded with a scratch`() {
+        val fresh = root.resolve("fresh")
+        val store = CollectionStore(fresh).also { it.reload() }
+
+        val project = store.tree.single()
+        assertEquals("Scratches", project.name)
+        val collection = project.children.single()
+        assertEquals("Scratches", collection.name)
+        assertEquals(listOf("Scratch request"), collection.children.map { it.name })
+    }
+
+    @Test
+    fun `an emptied collections folder is not seeded again`() {
+        val store = load()
+        assertTrue(store.tree.isEmpty())
+        assertEquals(emptyList(), load().tree.map { it.name })
+    }
+
     @Test
     fun `a dot-prefixed yaml inside a collection is not a request`() {
         val auth = collection(project("Acme"), "Auth")

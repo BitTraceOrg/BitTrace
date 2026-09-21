@@ -12,13 +12,13 @@ plugins {
 }
 
 group = "org.bittrace"
-version = "0.1.5-SNAPSHOT"
+version = "0.1.6-SNAPSHOT"
 
 // The version the *shipped* artifacts carry, which is not `version` above:
 // jpackage rejects a `-SNAPSHOT` suffix, and the MSI upgrade rules need a plain
 // `major.minor.patch`. Declared here so the installer version and the names of
 // the files in `build/dist` cannot drift apart.
-val appVersion = "0.1.5"
+val appVersion = "0.1.6"
 
 // Jewel's standalone artifacts are versioned `<jewel>-<intellij-build>`; the
 // platform icons live in a separate repository on their own build numbers, and
@@ -47,6 +47,13 @@ dependencies {
     implementation("org.jetbrains.jewel:jewel-int-ui-standalone:$jewelVersion")
     implementation("org.jetbrains.jewel:jewel-int-ui-decorated-window:$jewelVersion")
     implementation("com.jetbrains.intellij.platform:icons:$intellijIconsVersion")
+    // Jewel's own Markdown renderer, for a project's DOCUMENTATION.md. Core is
+    // the CommonMark processor and the block renderer; the styling module is
+    // the Int UI one, which is what a standalone app wants (the other variant
+    // reads its colours from a running IDE). Tables come as their own artifact.
+    implementation("org.jetbrains.jewel:jewel-markdown-core:$jewelVersion")
+    implementation("org.jetbrains.jewel:jewel-markdown-int-ui-standalone-styling:$jewelVersion")
+    implementation("org.jetbrains.jewel:jewel-markdown-extensions-gfm-tables:$jewelVersion")
     // KodeMirror — a native Kotlin port of CodeMirror 6 (no WebView, no JS
     // bridge). It brings the editor machinery this app had hand-rolled: line
     // numbers, find, completion, folding, and a viewport that does not lay out

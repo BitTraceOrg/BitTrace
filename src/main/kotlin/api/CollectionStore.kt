@@ -5,9 +5,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import java.nio.file.Files
 import java.nio.file.Path
-import java.nio.file.StandardCopyOption
-import java.time.LocalDateTime
-import java.time.format.DateTimeFormatter
 import kotlin.io.path.extension
 import kotlin.io.path.isDirectory
 import kotlin.io.path.name
@@ -136,12 +133,22 @@ class CollectionStore(private val root: Path? = defaultRoot()) {
         val dir = root ?: return
         tree = try {
             error = null
+            // The folder's absence is what "first run" means, so this is the
+            // one moment the scaffold can be laid without guessing. Deleting
+            // every project later leaves the folder behind, and an app that
+            // recreated `Scratches` each time the tree went empty would be
+            // arguing with whoever emptied it.
+            if (!Files.exists(dir)) seed(dir)
             if (!Files.isDirectory(dir)) {
                 emptyList()
             } else {
                 // The layout must settle before anything creates a repo.
                 adoptLegacyLayout(dir)
                 foldersIn(dir).map { project ->
+                    // Here rather than at creation: a project made before this
+                    // file existed — or one cloned from a repository that never
+                    // had it — gets its page on the next walk instead of never.
+                    ProjectDocs.ensureIn(project)
                     ProjectNode(project, project.name, foldersIn(project).map(::collectionAt))
                 }
             }
@@ -161,7 +168,7 @@ class CollectionStore(private val root: Path? = defaultRoot()) {
             .map { RequestNode(it, it.nameWithoutExtension, methodIn(it)) },
     )
 
-    /** Child folders, alphabetical, with dot-folders (notably `.trash`) hidden. */
+    /** Child folders, alphabetical, with dot-folders hidden. */
     private fun foldersIn(dir: Path): List<Path> = entriesIn(dir)
         .filter { it.isDirectory() && !it.name.startsWith(".") }
         .sortedBy { it.name.lowercase() }
@@ -203,6 +210,30 @@ class CollectionStore(private val root: Path? = defaultRoot()) {
         Files.createDirectories(project)
         stale.forEach { collection ->
             runCatching { Files.move(collection, project.resolve(collection.name)) }
+        }
+    }
+
+    /**
+     * Lays down `Scratches / Scratches / Scratch request` in a brand-new
+     * collections folder.
+     *
+     * Files, not a special case in the tree: what is seeded is an ordinary
+     * project, an ordinary collection and an ordinary request, so it renames,
+     * moves, commits and deletes like anything made by hand — and the code that
+     * walks the tree needs to know nothing about it.
+     *
+     * Failure is swallowed to the extent that a partly-made scaffold is left as
+     * it is. A read-only or full disk is a thing to find out about when saving,
+     * not a reason to refuse to open the panel.
+     */
+    private fun seed(dir: Path) {
+        runCatching {
+            val collection = dir.resolve(SCRATCH_PROJECT).resolve(SCRATCH_COLLECTION)
+            Files.createDirectories(collection)
+            val request = collection.resolve("$SCRATCH_REQUEST.yaml")
+            if (Files.notExists(request)) {
+                writeAtomically(request, RequestYaml.encode(ApiRequest(name = SCRATCH_REQUEST)))
+            }
         }
     }
 
@@ -274,6 +305,20 @@ class CollectionStore(private val root: Path? = defaultRoot()) {
     fun createProject(displayName: String): Result<Path> = runCatching {
         val dir = root ?: error("No collections folder available.")
         make(dir, displayName)
+    }
+
+    /**
+     * A free project folder named after [displayName], *not* created.
+     *
+     * For a clone, which wants to make the directory itself and refuses one
+     * that already has anything in it. The name is taken the same way every
+     * other default is — `Payments`, then `Payments 2` — so importing the same
+     * repository twice gives two projects rather than an error.
+     */
+    fun freeProjectPath(displayName: String): Result<Path> = runCatching {
+        val dir = root ?: error("No collections folder available.")
+        Files.createDirectories(dir)
+        freeName(dir, displayName) ?: error("Too many projects are called '$displayName'.")
     }
 
     /** Creates an empty collection folder inside [project]. */
@@ -423,20 +468,12 @@ class CollectionStore(private val root: Path? = defaultRoot()) {
         target
     }
 
-    /**
-     * Moves a node into `.trash/<timestamp>/` rather than deleting it.
-     *
-     * One `Files.move` instead of one `Files.delete`, and "I just deleted my
-     * whole project" stops being unrecoverable.
-     */
+    /** Deletes a node from disk, a folder together with everything under it. */
     fun delete(node: Node): Result<Unit> = runCatching {
         // Deleting it would look like it worked: the next reload would show an
         // empty Variables row again, with every value silently gone.
         check(node !is VariablesNode) { "Clear the rows instead of deleting the variables." }
-        val dir = root ?: error("No collections folder available.")
-        val bin = dir.resolve(".trash").resolve(LocalDateTime.now().format(STAMP))
-        Files.createDirectories(bin)
-        Files.move(node.path, bin.resolve(node.path.name), StandardCopyOption.REPLACE_EXISTING)
+        check(node.path.toFile().deleteRecursively()) { "Could not delete '${node.name}'." }
         reload()
         onChanged?.invoke(node.path)
     }
@@ -520,6 +557,17 @@ class CollectionStore(private val root: Path? = defaultRoot()) {
         /** Where the pre-project collections are gathered, once. */
         private const val LEGACY_PROJECT = "My project"
 
+        /**
+         * What the collections folder is seeded with the first time it is made.
+         *
+         * Somewhere to put a request you are only trying out, so that the first
+         * thing anyone sees is a tree with a place in it rather than an empty
+         * panel and three levels of vocabulary to learn first.
+         */
+        private const val SCRATCH_PROJECT = "Scratches"
+        private const val SCRATCH_COLLECTION = "Scratches"
+        private const val SCRATCH_REQUEST = "Scratch request"
+
         /** Far enough to reach `method:` in anything sanely written, and no further. */
         private const val METHOD_SCAN_LINES = 8
 
@@ -528,7 +576,5 @@ class CollectionStore(private val root: Path? = defaultRoot()) {
 
         /** Keeps clear of MAX_PATH on systems without long paths enabled. */
         private const val MAX_PATH_CHARS = 240
-
-        private val STAMP: DateTimeFormatter = DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss")
     }
 }

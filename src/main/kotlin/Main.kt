@@ -32,6 +32,7 @@ import org.bittrace.api.ProjectVariables
 import org.bittrace.api.HistoryStore
 import org.bittrace.api.requestFromFlow
 import org.bittrace.ui.components.AddressBar
+import org.bittrace.ui.layouts.widget.CaptureWidget
 import org.bittrace.ui.layouts.forge.ApiView
 import org.bittrace.ui.layouts.inspector.components.matchingBodies
 import org.bittrace.ui.layouts.inspector.components.FlowQuery
@@ -134,6 +135,9 @@ fun main() = application {
     }
 
     val windowState = rememberWindowState()
+    // Whether the floating capture widget is out. It floats beside the main
+    // window rather than replacing it, so the main window stays as it was.
+    var widgetMode by remember { mutableStateOf(false) }
     // Apply the persisted theme, and re-apply whenever it changes. Above the
     // window, because the window frame is themed too.
     LaunchedEffect(settings.settings.theme) { themeManager.applyId(settings.settings.theme) }
@@ -152,6 +156,8 @@ fun main() = application {
         ) {
             App(
                 store, service, settings, themeManager, logs, formatters, importers, collectionActions, flowActions, activity,
+                widgetMode = widgetMode,
+                onWidgetMode = { widgetMode = it },
             )
         }
     }
@@ -169,6 +175,8 @@ private fun DecoratedWindowScope.App(
     collectionActions: List<CollectionActionPlugin>,
     flowActions: List<FlowActionPlugin>,
     activity: ActivityStore,
+    widgetMode: Boolean,
+    onWidgetMode: (Boolean) -> Unit,
 ) {
     var nav by remember { mutableStateOf("home") }
     var selectedId by remember { mutableStateOf<String?>(null) }
@@ -401,7 +409,14 @@ private fun DecoratedWindowScope.App(
                 busy = sessionBusy,
             ),
             )
-            AddressBar(host = "127.0.0.1", port = port, running = service.isRunning)
+            AddressBar(
+                host = "127.0.0.1",
+                port = port,
+                running = service.isRunning,
+                docked = true,
+                // A second press puts the widget away again.
+                onToggleWidget = { onWidgetMode(!widgetMode) },
+            )
         }
         Row(Modifier.weight(1f).fillMaxWidth()) {
             // Rail stays a sibling on the left, so the floating log panel (scoped
@@ -480,6 +495,27 @@ private fun DecoratedWindowScope.App(
                     )
                 }
             }
+        }
+
+        // The same store instance the grid reads, handed over by reference.
+        if (widgetMode) {
+            CaptureWidget(
+                store = store,
+                service = service,
+                port = port,
+                onDock = { onWidgetMode(false) },
+                // Leaves the widget out: it is a place to watch from, and
+                // looking at one flow closely is no reason to lose it.
+                onInspect = { id ->
+                    selectedId = id
+                    nav = "traffic"
+                    if (window.extendedState and java.awt.Frame.ICONIFIED != 0) {
+                        window.extendedState = window.extendedState and java.awt.Frame.ICONIFIED.inv()
+                    }
+                    window.toFront()
+                    window.requestFocus()
+                },
+            )
         }
 
         if (importProjectOpen) {

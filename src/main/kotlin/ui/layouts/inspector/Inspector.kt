@@ -5,6 +5,8 @@ import org.bittrace.ui.components.isFormBody
 import org.bittrace.ui.components.parseForm
 import org.bittrace.ui.hostPath
 import org.bittrace.ui.layouts.inspector.components.Phase
+import org.bittrace.ui.layouts.inspector.components.PhaseRibbon
+import org.bittrace.ui.layouts.inspector.components.SizeRibbon
 import org.bittrace.ui.layouts.inspector.components.WebSocketTranscript
 import org.bittrace.ui.layouts.inspector.components.phasesOf
 import org.bittrace.ui.startStr
@@ -347,15 +349,6 @@ private fun SideHeader(row: TrafficRow, side: BodySide) {
             if (scheme.isNotEmpty()) PzText("$scheme://", color = P.dim, style = Typo.body)
             CellText("$host$path", color = P.text, style = Typo.body)
         }
-        MetaGrid(
-            buildList {
-                add(Triple("Version", r.httpVersion, P.text))
-                add(Triple("Remote", remoteOf(row).ifBlank { "—" }, P.text))
-                if (row.isConnect) add(Triple("Client", row.clientAddress.ifBlank { "—" }, P.text))
-                add(Triple("Header bytes", bytesStr(r.headersSize), P.text))
-                add(Triple("TLS", tlsText(row), if (tlsText(row) == "—") P.faint else P.ok))
-            },
-        )
     } else {
         val resp = row.response
         val (_, sColor) = statusOf(row)
@@ -373,6 +366,32 @@ private fun SideHeader(row: TrafficRow, side: BodySide) {
                 PzText("${resp.time.toLong()} ms · ${bytesStr(row.responseBodySize)}", color = P.dim, style = Typo.label)
             }
         }
+    }
+    SideMetaGrid(row, side)
+}
+
+/**
+ * The caption/value cells under a half's title line.
+ *
+ * Its own function so the capture widget shows exactly these cells for a flow
+ * rather than a second list of them, which would drift the day one gains a cell.
+ */
+@Composable
+internal fun SideMetaGrid(row: TrafficRow, side: BodySide) {
+    if (side == BodySide.REQUEST) {
+        val r = row.request.request
+        MetaGrid(
+            buildList {
+                add(Triple("Version", r.httpVersion, P.text))
+                add(Triple("Remote", remoteOf(row).ifBlank { "—" }, P.text))
+                if (row.isConnect) add(Triple("Client", row.clientAddress.ifBlank { "—" }, P.text))
+                add(Triple("Header bytes", bytesStr(r.headersSize), P.text))
+                add(Triple("TLS", tlsText(row), if (tlsText(row) == "—") P.faint else P.ok))
+            },
+        )
+    } else {
+        val resp = row.response
+        val (_, sColor) = statusOf(row)
         MetaGrid(
             listOf(
                 Triple("Version", resp?.response?.httpVersion ?: "—", P.text),
@@ -462,35 +481,6 @@ private fun ResponseOverview(row: TrafficRow) {
         KvRow("ttfb", row.response?.timings?.wait?.takeIf { it >= 0 }?.let { "${it.toLong()} ms" } ?: "—")
         KvRow("duration", if (resp != null) "${resp.time.toLong()} ms" else "—", if (resp?.error == true) P.err else P.text)
     }
-}
-
-@Composable
-private fun PhaseRibbon(row: TrafficRow) {
-    val phases = phasesOf(row)
-    if (phases.isEmpty()) return
-    val total = (row.response?.time ?: phases.sumOf { it.ms }).toLong()
-
-    Ribbon(
-        phases.map { RibbonSlice(it.ms.toFloat(), it.color, "${it.name} ${it.ms.toLong()}ms") },
-        total = "total $total ms",
-    )
-}
-
-/**
- * The same bar over a different quantity: the transfer split into header versus
- * body bytes. Shown by both the request and the response overview.
- */
-@Composable
-private fun SizeRibbon(headerBytes: Long, bodyBytes: Long) {
-    val h = headerBytes.coerceAtLeast(0)
-    val b = bodyBytes.coerceAtLeast(0)
-    Ribbon(
-        listOf(
-            RibbonSlice(h.toFloat(), P.info, "headers ${bytesStr(headerBytes)}"),
-            RibbonSlice(b.toFloat(), P.ok, "body ${bytesStr(bodyBytes)}"),
-        ),
-        total = "total ${bytesStr(h + b)}",
-    )
 }
 
 private fun schemeOf(url: String): String = url.substringBefore("://", "")

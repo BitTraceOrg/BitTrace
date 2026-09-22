@@ -12,13 +12,13 @@ plugins {
 }
 
 group = "org.bittrace"
-version = "0.1.6-SNAPSHOT"
+version = "0.1.7-SNAPSHOT"
 
 // The version the *shipped* artifacts carry, which is not `version` above:
 // jpackage rejects a `-SNAPSHOT` suffix, and the MSI upgrade rules need a plain
 // `major.minor.patch`. Declared here so the installer version and the names of
 // the files in `build/dist` cannot drift apart.
-val appVersion = "0.1.6"
+val appVersion = "0.1.7"
 
 // Jewel's standalone artifacts are versioned `<jewel>-<intellij-build>`; the
 // platform icons live in a separate repository on their own build numbers, and

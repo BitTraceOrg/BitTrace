@@ -47,6 +47,7 @@ import androidx.compose.ui.unit.dp
 import org.bittrace.ui.P
 
 import org.jetbrains.jewel.ui.component.ActionButton
+import org.jetbrains.jewel.ui.component.IconActionButton
 import org.jetbrains.jewel.ui.component.MenuScope
 import org.jetbrains.jewel.ui.component.PopupMenu
 import org.jetbrains.jewel.ui.component.separator
@@ -231,9 +232,19 @@ private fun MenuScope.menuEntry(action: MenuAction, onDismiss: () -> Unit) {
  * The confirmation is a toast under the bar rather than the label flipping to
  * "Copied". Swapping the label meant the one thing on screen saying whether the
  * proxy was up spent a second and a half saying something else instead.
+ *
+ * [onToggleWidget] adds the widget-mode button at the right edge of the field:
+ * out to the floating capture widget from the main window, and back in from the
+ * widget — the same field in both places, so [docked] only flips the icon.
  */
 @Composable
-fun AddressBar(host: String, port: Int, running: Boolean) {
+fun AddressBar(
+    host: String,
+    port: Int,
+    running: Boolean,
+    docked: Boolean = true,
+    onToggleWidget: (() -> Unit)? = null,
+) {
     val address = "https://$host:$port"
     var copied by remember { mutableStateOf(false) }
 
@@ -261,7 +272,8 @@ fun AddressBar(host: String, port: Int, running: Boolean) {
                 .clip(ChipShape)
                 .clickable { copied = copyToClipboard(address) }
                 .pointerHoverIcon(PointerIcon.Hand)
-                .padding(horizontal = 18.dp),
+                // The button brings its own margin on the right.
+                .padding(start = 18.dp, end = if (onToggleWidget != null) 3.dp else 18.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(1.dp),
         ) {
@@ -275,6 +287,19 @@ fun AddressBar(host: String, port: Int, running: Boolean) {
             PzText(host, color = P.text, style = Typo.label)
             PzText(":", color = P.faint, style = Typo.label)
             PzText(port.toString(), color = P.accent, style = Typo.label, weight = FontWeight.Medium)
+            if (onToggleWidget != null) {
+                Spacer(Modifier.width(10.dp))
+                // IntelliJ's own pair for the move — "open in window" and "move
+                // to tool window" — so the direction reads without a label. Its
+                // own click target, so pressing it does not also copy.
+                IconActionButton(
+                    key = if (docked) AllIconsKeys.Actions.MoveToWindow else AllIconsKeys.Actions.MoveToButton,
+                    contentDescription = if (docked) "Pop out to widget" else "Close the widget",
+                    // Sized by its own style: the button's padding sits inside
+                    // any size given here, and a smaller one crops the icon.
+                    onClick = onToggleWidget,
+                )
+            }
         }
 
         if (copied) {

@@ -27,6 +27,12 @@ class TrafficRow(
     val isConnect: Boolean = false,
     /** `host:port` of the client, on a CONNECT row; blank on every other. */
     val clientAddress: String = "",
+    /**
+     * This row is a connection's TLS handshake — the client hello and what the
+     * server answered — rather than an HTTP flow. It has no response, headers
+     * or body; everything it shows comes from [tls]. Advanced capture only.
+     */
+    val isTls: Boolean = false,
 ) {
     val id: String get() = request.id
 
@@ -46,7 +52,22 @@ class TrafficRow(
      * failed and has not succeeded, and counting it either way is a lie the
      * status bar would tell for as long as the request takes.
      */
-    val failed: Boolean? get() = response?.let { it.error || it.response.status >= 400 }
+    val failed: Boolean?
+        get() = if (isTls) tlsFailed else response?.let { it.error || it.response.status >= 400 }
+
+    /**
+     * A TLS row's outcome: failed as soon as either hop fails, succeeded once
+     * the origin hop is up and the client hop has not failed, null before that.
+     */
+    private val tlsFailed: Boolean?
+        get() {
+            val t = tls ?: return null
+            return when {
+                t.failure != null -> true
+                t.serverHandshake != null || t.clientHandshake != null -> false
+                else -> null
+            }
+        }
 
     /**
      * Wire length of each body, taking the measured figure once the completing
@@ -144,6 +165,14 @@ class TrafficRow(
 
     /** Ties a request to the CONNECT that opened its tunnel, when there was one. */
     val clientConnectionId: String get() = request.clientConnectionId
+
+    /**
+     * The TLS handshakes on this row's client connection — shared with every
+     * other row on it. Attached by [SessionStore] when a live row arrives; null
+     * for imported rows and for any flow with no connection id. Its contents
+     * stay empty unless advanced capture is on.
+     */
+    var tls: TlsConnection? = null
 
     override fun toString(): String =
         "TrafficRow(#$rowCount ${request.request.method} ${request.request.url} -> ${response?.response?.status})"

@@ -16,6 +16,8 @@ import org.bittrace.data.CompleteResponseMessage
 import org.bittrace.data.ConnectRequestData
 import org.bittrace.data.InitialRequestData
 import org.bittrace.data.InitialResponseData
+import org.bittrace.data.TlsClientHelloData
+import org.bittrace.data.TlsHandshakeData
 import org.bittrace.data.WebSocketEndData
 import org.bittrace.data.WebSocketMessageData
 
@@ -23,7 +25,7 @@ import org.bittrace.data.WebSocketMessageData
  * Runs the MITMConnect sidecar and turns its stdout into typed traffic events.
  *
  * Kotlin equivalent of `src-tauri/proxy/src/proxy.rs`. The sidecar is spawned
- * with the listen port as its only argument; stdout carries the binary frame
+ * with the listen port, plus `--advanced` under [CaptureMode.ADVANCED]; stdout carries the binary frame
  * protocol (see [FrameReader]) and stderr carries plain log lines. Each stream
  * is drained by its own daemon thread, so neither can block the other or the
  * caller.
@@ -33,10 +35,12 @@ import org.bittrace.data.WebSocketMessageData
  *
  * @param port the port passed to the sidecar
  * @param listener receives decoded frames; called on the reader threads
+ * @param mode the capture profile; fixed for the life of the process
  */
 class ProxyProcess(
     private val port: String,
     private val listener: ProxyListener,
+    val mode: CaptureMode = CaptureMode.BASIC,
 ) {
 
     private val json = Json {
@@ -99,7 +103,7 @@ class ProxyProcess(
         // Piping both streams also keeps the console-subsystem sidecar from
         // getting a window of its own, which is what CREATE_NO_WINDOW does on
         // the Rust side.
-        val process = ProcessBuilder(binary.absolutePath, port)
+        val process = ProcessBuilder(listOf(binary.absolutePath, port) + mode.args)
             .directory(binary.parentFile)
             .redirectInput(ProcessBuilder.Redirect.from(nullFile()))
             .redirectOutput(ProcessBuilder.Redirect.PIPE)
@@ -246,6 +250,14 @@ class ProxyProcess(
             Tags.WEBSOCKET_END ->
                 decode<WebSocketEndData>("proxy-websocket-end", frame.json)
                     ?.let(listener::onWebSocketEnd)
+
+            Tags.TLS_CLIENT_HELLO ->
+                decode<TlsClientHelloData>("proxy-tls-client-hello", frame.json)
+                    ?.let(listener::onTlsClientHello)
+
+            Tags.TLS_HANDSHAKE ->
+                decode<TlsHandshakeData>("proxy-tls-handshake", frame.json)
+                    ?.let(listener::onTlsHandshake)
 
             Tags.STATUS ->
                 decode<ProxyStatus>("proxy-status", frame.json)?.let { status ->

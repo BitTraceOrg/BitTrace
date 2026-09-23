@@ -4,6 +4,7 @@ import org.bittrace.ui.layouts.inspector.components.defaultColumns
 import org.bittrace.ui.layouts.inspector.components.CONTENT_KINDS
 import org.bittrace.ui.layouts.inspector.components.DEFAULT_COLUMN_KEYS
 import org.bittrace.data.HTTP_METHODS
+import org.bittrace.data.TLS_METHOD
 import org.bittrace.ui.layouts.inspector.components.STATUS_CLASSES
 import org.bittrace.ui.layouts.inspector.components.columnCatalog
 import org.bittrace.ui.layouts.inspector.components.FACET_COLUMNS
@@ -40,7 +41,7 @@ class GridFilterTest {
         // Declared rather than derived: a list built from captured traffic
         // cannot offer 5xx until a 5xx has happened.
         assertEquals(STATUS_CLASSES, byKey.getValue("st").facets)
-        assertEquals(HTTP_METHODS, byKey.getValue("method").facets)
+        assertEquals(HTTP_METHODS + TLS_METHOD, byKey.getValue("method").facets)
         assertEquals(CONTENT_KINDS, byKey.getValue("type").facets)
     }
 

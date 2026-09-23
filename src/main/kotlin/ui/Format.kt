@@ -64,6 +64,7 @@ const val UNKNOWN_KIND = "—"
  * a response that never said.
  */
 fun kindOfRow(row: TrafficRow): String {
+    if (row.isTls) return "tls"
     val declared = row.completeResponse?.response?.headers
         ?.firstOrNull { it.name.equals("content-type", ignoreCase = true) }
         ?.value
@@ -106,10 +107,22 @@ private val EXTENSION_KINDS = mapOf(
     "html" to "html", "htm" to "html",
 )
 
+/**
+ * The row's TLS version, short form ("1.3"), or [TLS_FAILED] when a handshake
+ * on its connection failed.
+ *
+ * The flow's own `_tls` comes first; the captured handshake fills in where it
+ * is blank — a CONNECT row always is, since the tunnel predates the TLS inside
+ * it — and only exists under advanced capture.
+ */
 fun tlsText(row: TrafficRow): String {
-    val tls = row.request.tls
-    return if (tls.isBlank() || tls == "—") "—" else tls.removePrefix("TLS ").removePrefix("TLSv").trim()
+    if (row.tls?.failure != null) return TLS_FAILED
+    val tls = row.request.tls.takeUnless { it.isBlank() || it == "—" } ?: row.tls?.version
+    return tls?.removePrefix("TLS ")?.removePrefix("TLSv")?.trim() ?: "—"
 }
+
+/** What [tlsText] shows for a connection whose handshake failed. */
+const val TLS_FAILED = "fail"
 
 fun bytesStr(size: Long?): String = when {
     size == null || size < 0 -> "—"
@@ -124,15 +137,43 @@ fun startStr(row: TrafficRow): String =
 
 /** Start time plus the flow's total elapsed time, once the response reports it. */
 fun endStr(row: TrafficRow): String {
+    if (row.isTls) return tlsEnd(row)?.let { CLOCK.format(it) }.orEmpty()
     val start = instantOf(row.request.startedDateTime) ?: return ""
     val ms = row.response?.time ?: return ""
     return CLOCK.format(start.plusMillis(ms.toLong()))
 }
 
-fun durStr(row: TrafficRow): String = row.response?.time?.let { "${it.toLong()} ms" } ?: ""
+fun durStr(row: TrafficRow): String =
+    if (row.isTls) tlsMillis(row)?.let { "$it ms" }.orEmpty()
+    else row.response?.time?.let { "${it.toLong()} ms" } ?: ""
+
+/**
+ * When a TLS row's handshake finished: the later of its two hops, since the
+ * connection is not usable until both are done. Null while either is pending.
+ */
+private fun tlsEnd(row: TrafficRow): Instant? {
+    val t = row.tls ?: return null
+    return listOfNotNull(t.serverHandshake, t.clientHandshake)
+        .mapNotNull { instantOf(it.timestamp) }
+        .maxOrNull()
+}
+
+/** How long a TLS row's handshake took, from the client hello to [tlsEnd]. */
+private fun tlsMillis(row: TrafficRow): Long? {
+    val start = instantOf(row.request.startedDateTime) ?: return null
+    val end = tlsEnd(row) ?: return null
+    return (end.toEpochMilli() - start.toEpochMilli()).takeIf { it >= 0 }
+}
 
 /** Status label + colour for the ST column and waterfall bars. */
 fun statusOf(row: TrafficRow): Pair<String, Color> {
+    // A handshake has no HTTP status; the one thing worth saying is whether it
+    // worked.
+    if (row.isTls) return when (row.failed) {
+        null -> "" to P.dim
+        true -> "FAIL" to P.err
+        false -> "OK" to P.ok
+    }
     val resp = row.response ?: return "" to P.dim
     if (resp.error) return "ERR" to P.err
     val st = resp.response.status

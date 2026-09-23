@@ -17,7 +17,7 @@ object Tags {
     const val COMPLETE_REQUEST = 4
     const val COMPLETE_RESPONSE = 5
 
-    /** CONNECT tunnel setup. Its own flow, linked by `clientConnectionId`. */
+    /** CONNECT tunnel setup. Its own flow, linked by `clientConnectionId`. Advanced capture only. */
     const val CONNECT_REQUEST = 6
     const val CONNECT_RESPONSE = 7
 
@@ -42,6 +42,12 @@ object Tags {
 
     /** The WebSocket closed, with its close handshake and totals. */
     const val WEBSOCKET_END = 12
+
+    /** A client began a TLS handshake. Advanced capture only. */
+    const val TLS_CLIENT_HELLO = 13
+
+    /** One hop's handshake finished or failed. Advanced capture only. */
+    const val TLS_HANDSHAKE = 14
 }
 
 /**

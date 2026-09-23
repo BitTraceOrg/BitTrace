@@ -11,6 +11,8 @@ import org.bittrace.data.ConnectRequestData
 import org.bittrace.data.InitialRequestData
 import org.bittrace.data.InitialResponseData
 import org.bittrace.data.SessionStore
+import org.bittrace.data.TlsClientHelloData
+import org.bittrace.data.TlsHandshakeData
 import org.bittrace.data.WebSocketEndData
 import org.bittrace.data.WebSocketMessageData
 import org.bittrace.data.WebSocketRecord
@@ -48,6 +50,12 @@ class ProxyService(
     /** PID as reported by the sidecar itself, once its first frame arrives. */
     val pid: String? get() = process?.pid
 
+    /**
+     * The profile the running sidecar was asked for, or null when stopped.
+     * [ProxyStatus.captureMode] is what it says it actually loaded.
+     */
+    val captureMode: CaptureMode? get() = process?.takeIf { it.isRunning }?.mode
+
     /** Seconds since the sidecar reported its PID. */
     val uptimeSeconds: Long? get() = process?.uptimeSeconds
 
@@ -82,10 +90,10 @@ class ProxyService(
      * and be retried from the Proxy menu, and having to relaunch the app to get
      * the sweep would defeat it.
      */
-    fun start(port: Int) {
+    fun start(port: Int, mode: CaptureMode = CaptureMode.BASIC) {
         check(!isRunning) { "proxy already running" }
         ProxyProcess.killOrphans(onLog)
-        ProxyProcess(port.toString(), listener).also {
+        ProxyProcess(port.toString(), listener, mode).also {
             process = it
             it.start()
         }
@@ -170,6 +178,33 @@ class ProxyService(
 
         override fun onConnectResponse(data: InitialResponseData) =
             store.onInitialResponse(data)
+
+        /**
+         * Hands the handshake to the store, which attaches it to every row on
+         * that connection, and says a failure out loud too. A failure produces
+         * no flow and no error hook, so it may have no row to land on — the log
+         * is the one place it is sure to be seen. Successful handshakes are not
+         * news.
+         */
+        override fun onTlsClientHello(data: TlsClientHelloData) =
+            store.onTlsClientHello(data)
+
+        override fun onTlsHandshake(data: TlsHandshakeData) {
+            store.onTlsHandshake(data)
+            if (data.established) return
+            val host = data.sni ?: data.address.ifBlank { "unknown host" }
+            val hop = when (data.side) {
+                // The client refused the certificate this proxy generated —
+                // almost always an untrusted CA or a pinned client.
+                TlsHandshakeData.SIDE_CLIENT -> "client rejected the proxy's certificate for $host"
+                else -> "handshake with $host failed"
+            }
+            val cert = data.certificates.firstOrNull()?.let { c ->
+                " (peer cert: ${c.subject ?: c.commonName ?: "?"}" +
+                    (if (c.expired == true) ", expired" else "") + ")"
+            }.orEmpty()
+            onLog(LogEntry("warn", "tls", "$hop: ${data.error ?: "no reason given"}$cert"))
+        }
 
         override fun onBodyChunk(message: BodyChunkMessage, body: ByteArray) {
             streamed.chunk(message, body)

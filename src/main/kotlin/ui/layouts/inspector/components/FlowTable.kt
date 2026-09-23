@@ -8,7 +8,9 @@ import org.bittrace.ui.UNKNOWN_KIND
 import org.bittrace.ui.kindOfRow
 import org.bittrace.ui.startStr
 import org.bittrace.ui.statusOf
+import org.bittrace.ui.TLS_FAILED
 import org.bittrace.ui.tlsText
+import org.bittrace.data.TlsConnection
 import org.bittrace.ui.components.EmptyState
 import org.jetbrains.jewel.ui.icons.AllIconsKeys
 import org.bittrace.ui.copyToClipboard
@@ -35,6 +37,7 @@ import androidx.compose.ui.unit.dp
 import org.bittrace.data.ExportMark
 import org.bittrace.data.LIVE_SESSION
 import org.bittrace.data.HTTP_METHODS
+import org.bittrace.data.TLS_METHOD
 import org.bittrace.data.TrafficRow
 import org.bittrace.ui.components.CellText
 import org.bittrace.ui.components.ColumnFilter
@@ -84,7 +87,7 @@ fun statusClassOf(row: TrafficRow): String = statusBucket(row, reset = "ERR")
  * for rather than a gap between the buckets.
  */
 val CONTENT_KINDS =
-    listOf("html", "css", "js", "json", "xml", "img", "font", "media", "text", "bin", UNKNOWN_KIND)
+    listOf("html", "css", "js", "json", "xml", "img", "font", "media", "text", "bin", "tls", UNKNOWN_KIND)
 
 /**
  * Every column the flow table can show, in catalog order — the order the
@@ -128,7 +131,8 @@ fun defaultColumns(): List<Col> = listOf(
     },
     Col(
         "method", "Method", 60f,
-        facets = HTTP_METHODS,
+        // TLS for the handshake rows; not an HTTP method, so not in the shared list.
+        facets = HTTP_METHODS + TLS_METHOD,
         value = { it.request.request.method },
         facet = { it.request.request.method.uppercase() },
     ) { CellText(it.request.request.method, P.info) },
@@ -159,8 +163,9 @@ fun defaultColumns(): List<Col> = listOf(
         value = { kindOfRow(it) },
         facet = { kindOfRow(it) },
     ) { CellText(kindOfRow(it), P.dim) },
-    Col("tls", "TLS", 56f, presets = listOf("1.3", "1.2", "none"), value = { tlsText(it) }) {
-        val t = tlsText(it); CellText(t, if (t == "—") P.faint else P.ok)
+    Col("tls", "TLS", 56f, presets = listOf("1.3", "1.2", TLS_FAILED, "none"), value = { tlsText(it) }) {
+        val t = tlsText(it)
+        CellText(t, when (t) { "—" -> P.faint; TLS_FAILED -> P.err; else -> P.ok })
     },
     Col(
         "size", "Size", 64f, end = true,
@@ -170,7 +175,8 @@ fun defaultColumns(): List<Col> = listOf(
         numeric = { it.responseBodySize?.takeIf { size -> size >= 0 } },
     ) {
         val s = it.responseBodySize
-        CellText(bytesStr(s), if (s == null || s < 0) P.err else P.text)
+        // A handshake row has no body, which is not the missing size the red is for.
+        CellText(bytesStr(s), if (it.isTls) P.faint else if (s == null || s < 0) P.err else P.text)
     },
     Col("time", "Time", 60f, end = true, value = { durStr(it) }) {
         CellText(durStr(it), if (it.response?.error == true) P.err else P.text)
@@ -202,7 +208,29 @@ fun optionalColumns(): List<Col> = listOf(
         value = { bytesStr(it.responseBodySize) }) {
         CellText(bytesStr(it.responseBodySize), P.dim)
     },
+) + tlsColumns()
+
+/**
+ * The handshake underneath a flow, from its client connection. Every one of
+ * these reads `—` unless advanced capture is on, which is why they are opt-in
+ * rather than part of the default set.
+ */
+private fun tlsColumns(): List<Col> = listOf(
+    tlsCol("tlsSni", "SNI", 140f) { it.sni },
+    tlsCol("tlsCipher", "Cipher", 160f) { it.cipher },
+    tlsCol("tlsAlpn", "ALPN", 56f) { it.alpn },
+    tlsCol("tlsCert", "Cert", 140f) { it.serverCertificate?.commonName ?: it.serverCertificate?.subject },
+    tlsCol("tlsIssuer", "Cert issuer", 160f) { it.serverCertificate?.issuer },
+    Col("tlsError", "TLS error", 200f, value = { it.tls?.failure?.error.orEmpty() }) {
+        CellText(it.tls?.failure?.error ?: "—", if (it.tls?.failure != null) P.err else P.faint)
+    },
 )
+
+private fun tlsCol(key: String, label: String, weight: Float, pick: (TlsConnection) -> String?): Col =
+    Col(key, label, weight, value = { row -> row.tls?.let(pick).orEmpty() }) { row ->
+        val text = row.tls?.let(pick)
+        CellText(text ?: "—", if (text == null) P.faint else P.dim)
+    }
 
 /**
  * The status bar's outcome filter, driven by clicking its OK / FAILED counts.

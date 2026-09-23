@@ -4,6 +4,7 @@ import org.bittrace.ui.hostPath
 import org.bittrace.ui.instantOf
 import org.bittrace.ui.kindOfRow
 import org.bittrace.data.HTTP_METHODS
+import org.bittrace.data.TLS_METHOD
 import org.bittrace.data.TrafficRow
 import org.bittrace.proxy.BodySide
 
@@ -188,6 +189,9 @@ fun facetValueOf(group: FacetGroup, row: TrafficRow): String = when (group) {
  *   show; the classification behind both is the same and was written twice.
  */
 fun statusBucket(row: TrafficRow, reset: String = STATUS_RESET): String {
+    // A handshake has no status class: a failed one sits with the resets, which
+    // is what it looks like from the client, and a good one with none of them.
+    if (row.isTls) return if (row.failed == true) reset else TLS_METHOD.lowercase()
     val response = row.response ?: return reset
     if (response.error) return reset
     val status = response.response.status
@@ -221,7 +225,7 @@ fun sizeBucket(bytes: Long?): String = when {
  */
 fun facetValues(group: FacetGroup, rows: List<TrafficRow>): List<String> = when (group) {
     FacetGroup.STATUS -> STATUS_BUCKETS
-    FacetGroup.METHOD -> HTTP_METHODS
+    FacetGroup.METHOD -> HTTP_METHODS + TLS_METHOD
     FacetGroup.DURATION -> DURATION_BUCKETS
     FacetGroup.SIZE -> SIZE_BUCKETS
     else -> rows.map { facetValueOf(group, it) }.filter { it.isNotBlank() }.distinct()

@@ -11,6 +11,8 @@ import org.bittrace.data.CompleteResponseMessage
 import org.bittrace.data.ConnectRequestData
 import org.bittrace.data.InitialRequestData
 import org.bittrace.data.InitialResponseData
+import org.bittrace.data.TlsClientHelloData
+import org.bittrace.data.TlsHandshakeData
 import org.bittrace.data.WebSocketEndData
 import org.bittrace.data.WebSocketMessageData
 import org.bittrace.data.requestBodySizeOf
@@ -276,6 +278,105 @@ class ProtocolDecodeTest {
         // The port it asked for, since there is no bound address to show.
         assertEquals("8080", status.address)
         assertEquals(7L, status.counters.droppedFrames)
+    }
+
+    /**
+     * The capture/TLS payloads below are built from the field lists in
+     * `core/Heartbeat.py` and `core/TlsCapture.py`, not from a capture.
+     */
+    @Test
+    fun `a basic status has no advanced counters, which is not the same as zero`() {
+        val status = json.decodeFromString<ProxyStatus>(
+            """{"state":"running","pid":1,"port":8080,"listenAddrs":["127.0.0.1:8080"],
+               "capture":["http","websocket"],
+               "counters":{"requests":3,"responses":3,"errors":0,"webSockets":0,
+               "webSocketMessages":0,"droppedFrames":0}}"""
+        )
+
+        assertEquals(CaptureMode.BASIC, status.captureMode)
+        assertNull(status.counters.connects)
+        assertNull(status.counters.tlsHandshakes)
+        assertNull(status.counters.tlsFailures)
+    }
+
+    @Test
+    fun `an advanced status names its modules and carries their counters`() {
+        val status = json.decodeFromString<ProxyStatus>(
+            """{"state":"running","pid":1,"port":8080,"listenAddrs":["127.0.0.1:8080"],
+               "capture":["http","websocket","connect","tls"],
+               "counters":{"requests":3,"responses":3,"errors":0,"webSockets":0,
+               "webSocketMessages":0,"droppedFrames":0,"connects":2,"tlsHandshakes":4,
+               "tlsFailures":1}}"""
+        )
+
+        assertEquals(CaptureMode.ADVANCED, status.captureMode)
+        assertEquals(2L, status.counters.connects)
+        assertEquals(1L, status.counters.tlsFailures)
+    }
+
+    @Test
+    fun `a starting status has not said which profile is live`() {
+        val status = json.decodeFromString<ProxyStatus>("""{"state":"starting","pid":1,"port":8080}""")
+        assertNull(status.captureMode)
+    }
+
+    @Test
+    fun `capture mode maps to the sidecar's arguments`() {
+        assertEquals(emptyList(), CaptureMode.BASIC.args)
+        assertEquals(listOf("--advanced"), CaptureMode.ADVANCED.args)
+        assertEquals(CaptureMode.BASIC, CaptureMode.fromId("nonsense"))
+        assertEquals(CaptureMode.ADVANCED, CaptureMode.fromId("Advanced"))
+    }
+
+    @Test
+    fun `a client hello keeps what the client offered`() {
+        val hello = json.decodeFromString<TlsClientHelloData>(
+            """{"clientConnectionId":"8e364c83","startedDateTime":"2026-09-20T10:00:00+00:00",
+               "clientAddress":"127.0.0.1:60121","destination":"example.com:443","sni":"example.com",
+               "ignoreConnection":false,"alpnProtocols":["h2","http/1.1"],
+               "cipherSuites":[4865,4866,4867],"cipherSuiteCount":3,"extensions":[0,10,43],
+               "supportedVersions":["TLSv1.3","TLSv1.2"],"supportedGroups":["x25519","secp256r1"]}"""
+        )
+
+        assertEquals("example.com", hello.sni)
+        assertEquals(listOf("h2", "http/1.1"), hello.alpnProtocols)
+        assertEquals(3, hello.cipherSuiteCount)
+        assertEquals(listOf("TLSv1.3", "TLSv1.2"), hello.supportedVersions)
+    }
+
+    @Test
+    fun `offered ciphers and extensions read by name, without grease`() {
+        val hello = TlsClientHelloData(
+            // 0x0A0A and 0xFAFA are GREASE; 0x1301 is known; 0x0099 is not.
+            cipherSuites = listOf(0x0A0A, 0x1301, 0x0099),
+            extensions = listOf(0xFAFA, 0, 43, 9999),
+        )
+        assertEquals(listOf("TLS_AES_128_GCM_SHA256", "0x0099"), hello.cipherSuiteNames)
+        assertEquals(listOf("server_name", "supported_versions", "9999"), hello.extensionNames)
+    }
+
+    @Test
+    fun `a failed handshake still names the certificate that was rejected`() {
+        val handshake = json.decodeFromString<TlsHandshakeData>(
+            """{"clientConnectionId":"8e364c83","connectionId":"c0ffee","side":"server",
+               "established":false,"timestamp":"2026-09-20T10:00:00+00:00",
+               "address":"expired.badssl.com:443","sni":"expired.badssl.com","version":null,
+               "cipher":null,"error":"certificate verify failed: certificate has expired",
+               "alpn":null,"alpnOffers":["h2"],
+               "certificates":[{"subject":"CN=*.badssl.com","issuer":"CN=COMODO","commonName":"*.badssl.com",
+               "organization":null,"serial":"4ae7","notBefore":"2015-04-09T00:00:00",
+               "notAfter":"2015-04-12T23:59:59","expired":true,"isCa":false,
+               "fingerprintSha256":"ab12","keyAlgorithm":"RSA","keyBits":2048,
+               "altNameCount":2,"altNames":["*.badssl.com","badssl.com"]}],
+               "certificateCount":3,"presentedCertificate":null}"""
+        )
+
+        assertFalse(handshake.established)
+        assertEquals(TlsHandshakeData.SIDE_SERVER, handshake.side)
+        assertNull(handshake.version)
+        assertEquals(3, handshake.certificateCount)
+        assertEquals(true, handshake.certificates.single().expired)
+        assertTrue(handshake.error!!.contains("expired"))
     }
 
     @Test

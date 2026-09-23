@@ -327,4 +327,55 @@ class SessionStoreTest {
         }
         onUi { assertTrue(assertNotNull(store.get("ws")).isWebSocket) }
     }
+
+    @Test
+    fun `tls lands on every row of its connection, whichever arrives first`() {
+        val store = SessionStore()
+        feedAndSettle {
+            // The CONNECT row is first; the handshakes follow it; the request
+            // inside the tunnel comes last and must still find them.
+            store.onInitialRequest(request("connect").copy(clientConnectionId = "c1", tls = ""))
+            store.onTlsHandshake(
+                TlsHandshakeData(clientConnectionId = "c1", side = "server", established = true, version = "TLSv1.3"),
+            )
+            store.onTlsHandshake(
+                TlsHandshakeData(clientConnectionId = "c1", side = "client", established = false, error = "unknown ca"),
+            )
+            store.onInitialRequest(request("inner").copy(clientConnectionId = "c1"))
+            store.onInitialRequest(request("other").copy(clientConnectionId = "c2"))
+        }
+
+        onUi {
+            val connect = assertNotNull(store.get("connect")?.tls)
+            assertTrue(connect === store.get("inner")?.tls)
+            assertEquals("TLSv1.3", connect.serverHandshake?.version)
+            assertEquals("unknown ca", connect.failure?.error)
+            assertTrue(assertNotNull(store.get("other")?.tls).isEmpty)
+
+            // The handshake got a row of its own, one per connection, sharing
+            // the same state — and a failed one reads as failed.
+            val tlsRows = store.rows.filter { it.isTls }
+            assertEquals(1, tlsRows.size)
+            assertTrue(tlsRows.single().tls === connect)
+            assertEquals(TLS_METHOD, tlsRows.single().request.request.method)
+            assertEquals(true, tlsRows.single().failed)
+        }
+    }
+
+    @Test
+    fun `a client hello opens a tls row named for its sni`() {
+        val store = SessionStore()
+        feedAndSettle {
+            store.onTlsClientHello(
+                TlsClientHelloData(clientConnectionId = "c9", sni = "example.com", destination = "93.184.216.34:443"),
+            )
+        }
+        onUi {
+            val row = store.rows.single()
+            assertTrue(row.isTls)
+            assertEquals("example.com:443", row.request.request.url)
+            // No handshake yet: neither failed nor succeeded.
+            assertNull(row.failed)
+        }
+    }
 }

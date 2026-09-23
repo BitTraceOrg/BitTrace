@@ -10,8 +10,16 @@ import org.bittrace.ui.layouts.inspector.components.SizeRibbon
 import org.bittrace.ui.layouts.inspector.components.WebSocketTranscript
 import org.bittrace.ui.layouts.inspector.components.phasesOf
 import org.bittrace.ui.startStr
+import org.bittrace.ui.clockOf
+import org.bittrace.ui.instantOf
+import org.bittrace.data.TLS_METHOD
+import org.bittrace.data.TlsCertificate
+import org.bittrace.data.TlsClientHelloData
 import org.bittrace.ui.statusOf
 import org.bittrace.ui.tlsText
+import org.bittrace.ui.TLS_FAILED
+import org.bittrace.data.TlsConnection
+import org.bittrace.data.TlsHandshakeData
 import androidx.compose.foundation.layout.RowScope
 import org.bittrace.ui.Typo
 import androidx.compose.foundation.ContextMenuItem
@@ -106,14 +114,29 @@ fun Inspector(
     // measured extent is pixels — convert so both axes move by the same amount.
     val density = LocalDensity.current
 
+    // A handshake row is not HTTP: its two halves are the client hello and the
+    // server's answer, with nothing for Headers or Body to show.
+    val tlsRow = row?.isTls == true
     val request: @Composable (Modifier) -> Unit = { modifier ->
-        Pane(
+        if (tlsRow) {
+            Pane(
+                modifier, "Request", null, BodySide.REQUEST, row, bodyProvider, formatters,
+                tabs = listOf(CLIENT_HELLO), default = CLIENT_HELLO,
+            )
+        } else Pane(
             modifier,
             "Request", null, BodySide.REQUEST, row, bodyProvider, formatters,
             tabs = listOf("Overview", "Raw", "Headers", "Cookies", "Body", "Form"), default = "Overview",
         )
     }
-    val response: @Composable (Modifier) -> Unit = { modifier ->
+    val response: @Composable (Modifier) -> Unit = response@{ modifier ->
+        if (tlsRow) {
+            Pane(
+                modifier, "Response", responseTrailing, BodySide.RESPONSE, row, bodyProvider, formatters,
+                tabs = listOf(SERVER_HELLO), default = SERVER_HELLO,
+            )
+            return@response
+        }
         // On a WebSocket, Messages *replaces* Body rather than joining it. A
         // `101` cannot carry a body — RFC 9112 ends a 1xx response at the blank
         // line after its headers, and everything after that belongs to the
@@ -203,6 +226,11 @@ private fun Pane(
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 PzText("Select a flow to inspect", color = P.dim, style = Typo.body)
             }
+            return@TabContentSwitcher
+        }
+
+        if (row.isTls) {
+            TlsHelloPane(row, side)
             return@TabContentSwitcher
         }
 
@@ -474,13 +502,172 @@ private fun ResponseOverview(row: TrafficRow) {
         KvRow("cache", headerValue(row, BodySide.RESPONSE, "cache-control") ?: "—")
 
         Section("Security")
-        KvRow("tls", if (https) tlsText(row) else "none (cleartext)", if (https) P.ok else P.warn)
+        KvRow(
+            "tls",
+            if (https) tlsText(row) else "none (cleartext)",
+            when { tlsText(row) == TLS_FAILED -> P.err; https -> P.ok; else -> P.warn },
+        )
+        row.tls?.takeUnless { it.isEmpty }?.let { TlsDetail(it) }
 
         Section("Timing")
         KvRow("started", startStr(row).ifBlank { "—" })
         KvRow("ttfb", row.response?.timings?.wait?.takeIf { it >= 0 }?.let { "${it.toLong()} ms" } ?: "—")
         KvRow("duration", if (resp != null) "${resp.time.toLong()} ms" else "—", if (resp?.error == true) P.err else P.text)
     }
+}
+
+/**
+ * The captured handshake for the row's connection. Advanced capture only, so
+ * the caller shows it only once something has arrived.
+ */
+@Composable
+private fun TlsDetail(tls: TlsConnection) {
+    tls.failure?.let { failed ->
+        KvRow("failed hop", if (failed.side == TlsHandshakeData.SIDE_CLIENT) "proxy → client" else "proxy → origin", P.err)
+        KvRow("error", failed.error ?: "—", P.err)
+    }
+    KvRow("sni", tls.sni ?: "—")
+    KvRow("cipher", tls.cipher ?: "—")
+    KvRow("alpn", tls.alpn ?: "—")
+    tls.serverCertificate?.let { cert ->
+        KvRow("cert", cert.commonName ?: cert.subject ?: "—")
+        KvRow("issuer", cert.issuer ?: "—")
+        KvRow("expires", cert.notAfter ?: "—", if (cert.expired == true) P.err else P.text)
+        if (cert.altNameCount > 0) KvRow("alt names", cert.altNameCount.toString())
+    }
+    tls.serverHandshake?.let { KvRow("chain", "${it.certificateCount} cert(s)") }
+    tls.clientHello?.let { hello ->
+        KvRow("client offered", "${hello.cipherSuiteCount} ciphers · " +
+            (hello.supportedVersions?.joinToString(", ") ?: "versions not listed"))
+    }
+}
+
+private const val CLIENT_HELLO = "Client Hello"
+private const val SERVER_HELLO = "Server Hello"
+
+/**
+ * One half of a TLS row: the client hello on the request side, the server's
+ * answer on the response side. The row's [TrafficRow.tls] is snapshot state,
+ * so a handshake that finishes while the row is open fills in here.
+ */
+@Composable
+private fun TlsHelloPane(row: TrafficRow, side: BodySide) {
+    val tls = row.tls
+    val scroll = rememberScrollState()
+    Box(Modifier.fillMaxSize()) {
+        Box(Modifier.fillMaxSize().verticalScroll(scroll)) {
+            CompositionLocalProvider(LocalContextMenuRepresentation provides NoContextMenu) {
+                SelectionContainer {
+                    Column(Modifier.fillMaxWidth()) {
+                        if (side == BodySide.REQUEST) ClientHello(row, tls?.clientHello)
+                        else ServerHello(tls)
+                    }
+                }
+            }
+        }
+        VScrollbar(scroll, Modifier.align(Alignment.CenterEnd).fillMaxHeight())
+    }
+}
+
+@Composable
+private fun ClientHello(row: TrafficRow, hello: TlsClientHelloData?) {
+    TitleRow {
+        PzText(TLS_METHOD, color = P.info, style = Typo.body, weight = FontWeight.SemiBold)
+        Spacer(Modifier.width(6.dp))
+        CellText(row.request.request.url, color = P.text, style = Typo.body)
+    }
+    if (hello == null) {
+        // The handshake frame made the row; the hello itself was dropped.
+        Pad("The client hello was not captured for this connection.")
+        return
+    }
+    Section("Client Hello", first = true)
+    KvRow("sni", hello.sni ?: "none (bare IP)")
+    KvRow("destination", hello.destination.ifBlank { "—" })
+    KvRow("client", hello.clientAddress.ifBlank { "—" })
+    KvRow("sent", startStr(row).ifBlank { "—" })
+    if (hello.ignoreConnection) KvRow("intercept", "passed through, not decrypted", P.warn)
+
+    Section("Offered")
+    KvRow("versions", hello.supportedVersions?.joinToString(", ") ?: "not listed")
+    KvRow("alpn", hello.alpnProtocols.joinToString(", ").ifBlank { "none" })
+    KvRow("groups", hello.supportedGroups?.joinToString(", ") ?: "not listed")
+
+    Section("Cipher suites · ${hello.cipherSuiteCount}")
+    hello.cipherSuiteNames.forEachIndexed { i, name -> KvRow("${i + 1}", name, capitalize = false) }
+
+    Section("Extensions · ${hello.extensionNames.size}")
+    hello.extensionNames.forEachIndexed { i, name -> KvRow("${i + 1}", name, capitalize = false) }
+}
+
+/**
+ * What the server answered. mitmproxy surfaces no raw ServerHello, only its
+ * outcome — the negotiated version, cipher and ALPN, and the chain the origin
+ * presented — which is the same information in a more useful form.
+ */
+@Composable
+private fun ServerHello(tls: TlsConnection?) {
+    val server = tls?.serverHandshake
+    val client = tls?.clientHandshake
+    TitleRow {
+        val (text, color) = when {
+            tls?.failure != null -> "Handshake failed" to P.err
+            server != null -> "Handshake established" to P.ok
+            else -> "pending" to P.dim
+        }
+        PzText(text, color = color, style = Typo.body, weight = FontWeight.SemiBold)
+        Spacer(Modifier.weight(1f))
+        server?.version?.let { PzText(it, color = P.dim, style = Typo.label) }
+    }
+    if (server == null && client == null) {
+        Pad("Waiting for the server to answer.")
+        return
+    }
+
+    tls?.failure?.let { failed ->
+        Section("Failure", first = true)
+        KvRow("hop", if (failed.side == TlsHandshakeData.SIDE_CLIENT) "proxy → client" else "proxy → origin", P.err)
+        KvRow("error", failed.error ?: "—", P.err)
+    }
+
+    server?.let { s ->
+        Section("Server Hello", first = tls.failure == null)
+        KvRow("server", s.address.ifBlank { "—" })
+        KvRow("version", s.version ?: "—")
+        KvRow("cipher", s.cipher ?: "—")
+        KvRow("alpn", s.alpn ?: "—")
+        KvRow("at", instantOf(s.timestamp)?.let { clockOf(it.toEpochMilli()) } ?: "—")
+
+        Section("Certificate chain · ${s.certificateCount}")
+        s.certificates.forEachIndexed { i, cert -> CertificateRows(if (i == 0) "leaf" else "#${i + 1}", cert) }
+        if (s.certificateCount > s.certificates.size) {
+            Pad("${s.certificateCount - s.certificates.size} more not captured.")
+        }
+    }
+
+    // Whether the client accepted what the proxy showed it — the hop that
+    // breaks when the client does not trust the proxy's CA.
+    client?.let { c ->
+        Section("Proxy → client")
+        KvRow("accepted", if (c.established) "yes" else "no", if (c.established) P.ok else P.err)
+        c.presentedCertificate?.let { CertificateRows("presented", it) }
+    }
+}
+
+@Composable
+private fun CertificateRows(label: String, cert: TlsCertificate) {
+    KvRow(label, cert.commonName ?: cert.subject ?: "—", P.info)
+    KvRow("subject", cert.subject ?: "—")
+    KvRow("issuer", cert.issuer ?: "—")
+    KvRow("valid", "${cert.notBefore ?: "?"} → ${cert.notAfter ?: "?"}", if (cert.expired == true) P.err else P.text)
+    cert.keyAlgorithm?.let { KvRow("key", listOfNotNull(it, cert.keyBits?.let { b -> "$b bits" }).joinToString(" · ")) }
+    if (cert.altNameCount > 0) {
+        KvRow(
+            "alt names",
+            cert.altNames.joinToString(", ") + if (cert.altNamesTruncated) " … (${cert.altNameCount})" else "",
+        )
+    }
+    cert.fingerprintSha256?.let { KvRow("sha-256", it, capitalize = false) }
 }
 
 private fun schemeOf(url: String): String = url.substringBefore("://", "")

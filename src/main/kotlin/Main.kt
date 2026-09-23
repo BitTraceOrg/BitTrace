@@ -74,6 +74,7 @@ import org.bittrace.plugin.format.BodyFormatter
 import org.bittrace.plugin.collection.CollectionActionPlugin
 import org.bittrace.plugin.flow.FlowActionPlugin
 import org.bittrace.plugin.importer.RequestImporter
+import org.bittrace.proxy.CaptureMode
 import org.bittrace.proxy.ProxyService
 import org.bittrace.session.HarExporter
 import org.bittrace.session.HarImporter
@@ -115,9 +116,10 @@ fun main() = application {
     // Start the sidecar off the UI thread; stop it when the app closes.
     DisposableEffect(Unit) {
         val port = settings.settings.proxyPort
+        val mode = CaptureMode.fromId(settings.settings.proxyCaptureMode)
         thread(isDaemon = true, name = "proxy-launcher") {
-            runCatching { service.start(port) }
-                .onSuccess { logs.add("info", "proxy", "listening on 127.0.0.1:$port") }
+            runCatching { service.start(port, mode) }
+                .onSuccess { logs.add("info", "proxy", "listening on 127.0.0.1:$port (${mode.id} capture)") }
                 .onFailure { logs.add("error", "proxy", "start failed: ${it.message}") }
         }
         onDispose { service.stop(); activity.flush() }
@@ -308,6 +310,7 @@ private fun DecoratedWindowScope.App(
                 service = service,
                 running = service.isRunning,
                 port = port,
+                captureMode = CaptureMode.fromId(settings.settings.proxyCaptureMode),
                 logsOpen = logsOpen,
                 horizontalLayout = settings.settings.horizontalLayout,
                 onNav = { nav = it },
@@ -653,6 +656,7 @@ private fun appMenus(
     service: ProxyService,
     running: Boolean,
     port: Int,
+    captureMode: CaptureMode,
     logsOpen: Boolean,
     horizontalLayout: Boolean,
     onNav: (String) -> Unit,
@@ -771,7 +775,7 @@ private fun appMenus(
                 onClick = if (running) {
                     null
                 } else {
-                    { thread(isDaemon = true, name = "proxy-start") { runCatching { service.start(port) } } }
+                    { thread(isDaemon = true, name = "proxy-start") { runCatching { service.start(port, captureMode) } } }
                 },
             ),
             MenuAction(

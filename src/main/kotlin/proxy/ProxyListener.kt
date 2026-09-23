@@ -6,6 +6,8 @@ import org.bittrace.data.CompleteResponseMessage
 import org.bittrace.data.ConnectRequestData
 import org.bittrace.data.InitialRequestData
 import org.bittrace.data.InitialResponseData
+import org.bittrace.data.TlsClientHelloData
+import org.bittrace.data.TlsHandshakeData
 import org.bittrace.data.WebSocketEndData
 import org.bittrace.data.WebSocketMessageData
 
@@ -59,6 +61,12 @@ interface ProxyListener {
 
     /** The WebSocket closed; the totals say how much of it was captured. */
     fun onWebSocketEnd(message: WebSocketEndData) {}
+
+    /** A client began a TLS handshake. Advanced capture only. */
+    fun onTlsClientHello(data: TlsClientHelloData) {}
+
+    /** One hop's TLS handshake finished or failed. Advanced capture only. */
+    fun onTlsHandshake(data: TlsHandshakeData) {}
 
     /** [body] is the raw request body that travelled alongside the metadata. */
     fun onCompleteRequest(message: CompleteRequestMessage, body: ByteArray) {}

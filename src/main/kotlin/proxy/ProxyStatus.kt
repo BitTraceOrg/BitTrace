@@ -31,6 +31,12 @@ data class ProxyStatus(
     val intervalMs: Long = 60_000,
     val mitmproxyVersion: String = "",
     /**
+     * The capture modules actually loaded — `http`, `websocket`, and under
+     * advanced capture `connect` and `tls` too. Empty on a `starting` frame.
+     * Read this rather than inferring the profile from which counters exist.
+     */
+    val capture: List<String> = emptyList(),
+    /**
      * The addresses actually bound, `host:port` each. Empty on a `starting`
      * frame — and empty on a `running` one means the proxy never got its port,
      * which is the one failure that otherwise looks exactly like success.
@@ -56,13 +62,24 @@ data class ProxyStatus(
     @Serializable
     data class QueueDepth(val depth: Int = 0, val maxSize: Int = 0)
 
-    /** Cumulative since the sidecar started, not per interval. */
+    /**
+     * Cumulative since the sidecar started, not per interval.
+     *
+     * The sidecar sends only the counters of the modules it loaded, so the
+     * nullable ones are null under basic capture: nothing is watching for
+     * those at all, which is not the same as having seen none.
+     */
     @Serializable
     data class Counters(
         val requests: Long = 0,
         val responses: Long = 0,
         val errors: Long = 0,
-        val connects: Long = 0,
+        /** CONNECT tunnels; null unless advanced capture is live. */
+        val connects: Long? = null,
+        /** TLS handshakes, both hops; null unless advanced capture is live. */
+        val tlsHandshakes: Long? = null,
+        /** Handshakes that failed; null unless advanced capture is live. */
+        val tlsFailures: Long? = null,
         /** WebSocket connections seen, counted at their handshake. */
         val webSockets: Long = 0,
         /** Messages across all of them, both directions. */
@@ -85,6 +102,17 @@ data class ProxyStatus(
      * app looks healthy and captures nothing.
      */
     val portLost: Boolean get() = state == RUNNING && listenAddrs.isEmpty()
+
+    /**
+     * The profile the sidecar says is live, or null before it has said —
+     * a `starting` frame is sent before any addon is loaded.
+     */
+    val captureMode: CaptureMode?
+        get() = when {
+            capture.isEmpty() -> null
+            "tls" in capture || "connect" in capture -> CaptureMode.ADVANCED
+            else -> CaptureMode.BASIC
+        }
 
     /** How full the sidecar's queue is, 0..1, or 0 when it has not said. */
     val pressure: Float

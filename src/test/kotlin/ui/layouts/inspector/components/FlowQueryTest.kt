@@ -1,6 +1,7 @@
 package org.bittrace.ui.layouts.inspector.components
 
 import org.bittrace.data.HTTP_METHODS
+import org.bittrace.data.TLS_METHOD
 import org.bittrace.data.InitialRequestData
 import org.bittrace.data.InitialResponseData
 import org.bittrace.data.TrafficRow
@@ -193,8 +194,8 @@ class FlowQueryTest {
         // Three panels used to answer "which methods are there?" differently.
         // The band's answer was the worst of them: derived from the capture, it
         // could not offer DELETE until a DELETE had happened.
-        assertEquals(HTTP_METHODS, facetValues(FacetGroup.METHOD, rows))
-        assertEquals(HTTP_METHODS, facetValues(FacetGroup.METHOD, emptyList()))
+        assertEquals(HTTP_METHODS + TLS_METHOD, facetValues(FacetGroup.METHOD, rows))
+        assertEquals(HTTP_METHODS + TLS_METHOD, facetValues(FacetGroup.METHOD, emptyList()))
     }
 
     // --- text ---------------------------------------------------------------

@@ -40,6 +40,7 @@ import kotlinx.coroutines.withContext
 import org.bittrace.data.SettingsStore
 import org.bittrace.data.horizontalLayout
 import org.bittrace.plugin.ThemeManager
+import org.bittrace.proxy.CaptureMode
 import org.bittrace.proxy.CertInfo
 import org.bittrace.proxy.CertTrust
 import org.bittrace.proxy.CertificateAuthority
@@ -287,8 +288,62 @@ private fun ProxyPane(settings: SettingsStore, service: ProxyService) = Pane(Cat
 
     Hint("Applying restarts the proxy on the new port. Point your client or system proxy at 127.0.0.1:<port>.")
 
+    CaptureModeSection(settings, service)
+
     Spacer(Modifier.height(2.dp))
     CertificateSection()
+}
+
+/**
+ * Basic or advanced capture. The profile is fixed for the life of a sidecar,
+ * so picking one saves it and restarts the proxy on the same port — the same
+ * contract as the listen port above.
+ *
+ * The live line reads the sidecar's own `capture` list rather than echoing the
+ * setting back, so a sidecar too old to know `--advanced` shows up as basic
+ * instead of claiming a capture that is not happening.
+ */
+@Composable
+private fun CaptureModeSection(settings: SettingsStore, service: ProxyService) {
+    val selected = CaptureMode.fromId(settings.settings.proxyCaptureMode)
+
+    SettingField("Capture") {
+        SegmentedToggle(
+            segments = CaptureMode.entries.map { Segment(it.id, it.label) },
+            selected = selected.id,
+        ) { id ->
+            val mode = CaptureMode.fromId(id)
+            if (mode != selected) applyCaptureMode(mode, settings, service)
+        }
+    }
+
+    val live = service.status?.captureMode
+    if (service.isRunning && live != null) {
+        val modules = service.status?.capture.orEmpty().joinToString(", ")
+        val mismatch = live != selected
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Spacer(Modifier.width(FormStyle.Roomy.column))
+            Dot(if (mismatch) P.warn else P.ok, 6)
+            Spacer(Modifier.width(7.dp))
+            PzText(
+                if (mismatch) "Sidecar is capturing ${live.id} ($modules) — restart pending or unsupported"
+                else "Capturing $modules",
+                color = P.faint, style = Typo.label,
+            )
+        }
+    }
+
+    when (selected) {
+        CaptureMode.BASIC -> Hint(
+            "Basic captures the traffic itself: HTTP flows, bodies and WebSocket messages.",
+        )
+        CaptureMode.ADVANCED -> Hint(
+            "Advanced also reports the connection machinery underneath: CONNECT tunnels and TLS " +
+                "handshakes, including ones that fail before any request is made. Costs frames on " +
+                "every tunnel and handshake.",
+        )
+    }
+    Hint("Changing it restarts the proxy.")
 }
 
 /**
@@ -536,11 +591,21 @@ private fun applyPort(text: String, settings: SettingsStore, service: ProxyServi
     val port = text.toIntOrNull() ?: return
     if (port !in 1..65535) return
     settings.update { it.copy(proxyPort = port) }
+    restartProxy(port, CaptureMode.fromId(settings.settings.proxyCaptureMode), service)
+}
+
+/** Persists the capture profile, then restarts the sidecar with it. */
+private fun applyCaptureMode(mode: CaptureMode, settings: SettingsStore, service: ProxyService) {
+    settings.update { it.copy(proxyCaptureMode = mode.id) }
+    restartProxy(settings.settings.proxyPort, mode, service)
+}
+
+private fun restartProxy(port: Int, mode: CaptureMode, service: ProxyService) {
     thread(isDaemon = true, name = "proxy-restart") {
         runCatching {
             service.stop()
             Thread.sleep(300) // let the OS release the old port before rebinding
-            service.start(port)
+            service.start(port, mode)
         }.onFailure { System.err.println("[proxy] restart failed: $it") }
     }
 }

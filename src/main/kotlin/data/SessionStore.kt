@@ -9,6 +9,12 @@ import java.awt.EventQueue
 /** The live capture's session id. Imported sessions get 1, 2, 3… */
 const val LIVE_SESSION = 0
 
+/** The Method column's value on a TLS handshake row. */
+const val TLS_METHOD = "TLS"
+
+/** Prefixes a TLS row's id, which is otherwise its client connection id. */
+private const val TLS_ROW_PREFIX = "tls:"
+
 /** A note in the flow list that a session was written to disk. */
 class ExportMark(val id: Long, val label: String, val afterRowCount: Int)
 
@@ -158,10 +164,16 @@ class SessionStore(
         )
     }
 
-    /** Registers a fresh live row and places it. Call on the UI thread. */
-    private fun add(row: TrafficRow) {
-        onLiveFlow(row.request.startedDateTime)
+    /**
+     * Registers a fresh live row and places it. Call on the UI thread.
+     *
+     * [countsAsFlow] is false for a TLS row: a handshake is not traffic of its
+     * own, and counting it would double every HTTPS request in the tally.
+     */
+    private fun add(row: TrafficRow, countsAsFlow: Boolean = true) {
+        if (countsAsFlow) onLiveFlow(row.request.startedDateTime)
         byId[row.id] = row
+        row.clientConnectionId.takeIf { it.isNotBlank() }?.let { row.tls = tlsFor(it) }
         // Mid-import, hold the row back so the imported run stays contiguous —
         // but never drop it, and never delay its byId registration.
         if (importing != null && deferred.size < MAX_DEFERRED) deferred.add(row) else backing.add(row)
@@ -234,6 +246,71 @@ class SessionStore(
         byId[message.id]?.webSocketEnd = message
     }
 
+    // --- TLS ---
+
+    /**
+     * TLS state by client connection id.
+     *
+     * Keyed by connection rather than hung off a row, because the frames can
+     * land on either side of the rows they describe: the hello arrives after
+     * the CONNECT row but before any request inside the tunnel, and a failed
+     * handshake may never get a row at all. Whichever arrives first creates
+     * the entry and the other finds it. Oldest connections are forgotten past
+     * [MAX_TLS_CONNECTIONS]; rows already holding one keep it.
+     */
+    private val tlsConnections = object : LinkedHashMap<String, TlsConnection>() {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, TlsConnection>) =
+            size > MAX_TLS_CONNECTIONS
+    }
+
+    private fun tlsFor(clientConnectionId: String): TlsConnection =
+        tlsConnections.getOrPut(clientConnectionId) { TlsConnection(clientConnectionId) }
+
+    fun onTlsClientHello(data: TlsClientHelloData): Unit = onUi {
+        if (data.clientConnectionId.isBlank()) return@onUi
+        tlsFor(data.clientConnectionId).clientHello = data
+        addTlsRow(data.clientConnectionId, data.startedDateTime, data.sni, data.destination)
+    }
+
+    fun onTlsHandshake(data: TlsHandshakeData): Unit = onUi {
+        if (data.clientConnectionId.isBlank()) return@onUi
+        tlsFor(data.clientConnectionId).record(data)
+        // Normally the hello made the row already; this covers a hello that
+        // was dropped under pressure, so a failure still gets a row.
+        addTlsRow(data.clientConnectionId, data.timestamp, data.sni, data.address)
+    }
+
+    /**
+     * Gives a connection's handshake a row of its own, once — the client
+     * hello on its request side, the server's answer on its response side.
+     *
+     * A row rather than something hung off the flows, because a failed
+     * handshake has no flow to hang off: this is the only row it will ever get.
+     */
+    private fun addTlsRow(clientConnectionId: String, startedDateTime: String, sni: String?, address: String) {
+        val id = TLS_ROW_PREFIX + clientConnectionId
+        if (byId.containsKey(id)) return
+        val port = address.substringAfterLast(':', "").takeIf { it.isNotBlank() && it != address }
+        val target = sni?.let { if (port != null) "$it:$port" else it } ?: address.ifBlank { "unknown" }
+        add(
+            TrafficRow(
+                nextRowCount++,
+                InitialRequestData(
+                    id = id,
+                    startedDateTime = startedDateTime,
+                    request = InitialRequestData.RequestHead(
+                        method = TLS_METHOD, url = target, httpVersion = "", headersSize = 0, bodySize = 0,
+                    ),
+                    tls = "",
+                    clientConnectionId = clientConnectionId,
+                ),
+                LIVE_SESSION,
+                isTls = true,
+            ),
+            countsAsFlow = false,
+        )
+    }
+
     // --- import ---
 
     /**
@@ -296,6 +373,7 @@ class SessionStore(
     fun clear(): Unit = onUi {
         backing.clear()
         byId.clear()
+        tlsConnections.clear()
         deferred.clear()
         exportMarks.clear()
         sessionNames.clear()
@@ -411,6 +489,9 @@ class SessionStore(
 
         /** Payload bytes kept per WebSocket, across all of its messages. */
         const val MAX_SOCKET_BYTES = 16L * 1024 * 1024
+
+        /** Client connections whose TLS state is kept for rows yet to arrive. */
+        const val MAX_TLS_CONNECTIONS = 20_000
 
         /** A row plus its nested heads, references and snapshot state holders. */
         private const val ROW_OVERHEAD = 512L

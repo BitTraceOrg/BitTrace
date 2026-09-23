@@ -10,6 +10,13 @@ import kotlinx.serialization.Serializable
 data class Settings(
     /** Port the sidecar proxy listens on. */
     val proxyPort: Int = 8888,
+    /**
+     * The sidecar's capture profile, as `org.bittrace.proxy.CaptureMode.id`:
+     * "basic" (flows, bodies, WebSockets) or "advanced" (plus CONNECT tunnels
+     * and TLS handshakes). Basic by default — advanced costs frames on every
+     * tunnel and handshake. Anything unrecognised reads as basic.
+     */
+    val proxyCaptureMode: String = "basic",
     /** Height of the inspector pane, in dp. */
     val inspectorHeightDp: Float = 320f,
     /** Width of the inspector in the horizontal layout, in dp. */

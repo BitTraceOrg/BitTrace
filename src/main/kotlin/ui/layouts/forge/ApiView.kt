@@ -1176,9 +1176,9 @@ private fun BodyTab(state: ApiClientState, window: ComposeWindow, onNotice: (Str
             body.fromFile -> FileBody(body.filePath)
 
             // GraphQL is two documents, so it gets two editors: the operation is
-            // GraphQL and the variables are JSON, they highlight differently, and
-            // only one of them is worth completing. They are assembled into the
-            // JSON envelope at send time — see `ApiBody.payload`.
+            // GraphQL and the variables are JSON, and they highlight differently.
+            // They are assembled into the JSON envelope at send time — see
+            // `ApiBody.payload`.
             body.isGraphQl -> {
                 SplitPane(
                     horizontal = false,
@@ -1210,9 +1210,6 @@ private fun BodyTab(state: ApiClientState, window: ComposeWindow, onNotice: (Str
                                 },
                                 modifier = Modifier.weight(1f).fillMaxWidth(),
                                 contentType = body.contentType,
-                                // Completion comes from the language now — see
-                                // `ui/editor/GraphQlLanguage.kt`, which carries
-                                // its own source.
                                 placeholder = "query { }",
                             )
                         }

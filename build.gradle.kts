@@ -25,7 +25,6 @@ val appVersion = "0.1.8"
 // the nearest published one to Jewel's is what we align everything onto.
 val jewelVersion = "0.39.1-262.9437.29"
 val intellijIconsVersion = "262.9437.185"
-val kodeMirrorVersion = "0.3.6"
 val jgitVersion = "7.1.0.202411261347-r"
 
 repositories {
@@ -54,30 +53,6 @@ dependencies {
     implementation("org.jetbrains.jewel:jewel-markdown-core:$jewelVersion")
     implementation("org.jetbrains.jewel:jewel-markdown-int-ui-standalone-styling:$jewelVersion")
     implementation("org.jetbrains.jewel:jewel-markdown-extensions-gfm-tables:$jewelVersion")
-    // KodeMirror — a native Kotlin port of CodeMirror 6 (no WebView, no JS
-    // bridge). It brings the editor machinery this app had hand-rolled: line
-    // numbers, find, completion, folding, and a viewport that does not lay out
-    // the whole document. Built against Compose 1.11.1, the version Jewel pins,
-    // so the two agree without forcing anything.
-    implementation(platform("com.monkopedia.kodemirror:kodemirror-bom:$kodeMirrorVersion"))
-    implementation("com.monkopedia.kodemirror:view")
-    implementation("com.monkopedia.kodemirror:state")
-    implementation("com.monkopedia.kodemirror:language")
-    // Arrives transitively through `language`, but the app names `Tags` itself
-    // in `ui/editor/EditorHighlight.kt`, and a transitive dependency is on the
-    // runtime classpath only.
-    implementation("com.monkopedia.kodemirror:lezer-highlight")
-    implementation("com.monkopedia.kodemirror:commands")
-    implementation("com.monkopedia.kodemirror:basic-setup")
-    implementation("com.monkopedia.kodemirror:autocomplete")
-    implementation("com.monkopedia.kodemirror:search")
-    // The languages this app actually shows. GraphQL is not among them upstream
-    // and is defined in `ui/editor/GraphQlLanguage.kt`.
-    implementation("com.monkopedia.kodemirror:lang-json")
-    implementation("com.monkopedia.kodemirror:lang-xml")
-    implementation("com.monkopedia.kodemirror:lang-html")
-    implementation("com.monkopedia.kodemirror:lang-javascript")
-    implementation("com.monkopedia.kodemirror:lang-css")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.11.0")
     // Streaming JSON for HAR import/export. jackson-core only (no databind):
     // kotlinx-serialization cannot decode lazily inside an object, and HAR

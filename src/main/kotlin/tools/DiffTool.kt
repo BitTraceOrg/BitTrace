@@ -11,8 +11,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -35,8 +33,8 @@ import org.bittrace.ui.P
 import org.bittrace.ui.components.PzText
 import org.bittrace.ui.components.Segment
 import org.bittrace.ui.components.SegmentedToggle
+import org.bittrace.ui.components.editor.EditorScrollState
 import org.bittrace.ui.Typo
-import org.bittrace.ui.components.VScrollbar
 import org.bittrace.ui.bottomBorder
 import org.bittrace.ui.rightBorder
 
@@ -203,22 +201,19 @@ private fun mimeOf(row: TrafficRow, side: BodySide): String {
 /**
  * The diff itself: two editors, side by side, one line per aligned row.
  *
- * Both sides are [DiffPane]s — the app's own KodeMirror surface — rather than
- * two columns of text, so what you compare here is highlighted, searchable and
- * foldable the way the same body is in the inspector. The view's own job is
+ * Both sides are [DiffPane]s — the app's own code surface — rather than two
+ * columns of text, so what you compare here is highlighted, searchable and
+ * selectable the way the same body is in the inspector. The view's own job is
  * what an editor cannot do for itself: keeping the two level.
  *
- * One scroll, outside both, is what does that. The panes are laid out at their
- * documents' full height inside it, so the rows cannot drift apart the way two
- * independently scrolling editors would — and drifting apart is the one thing
- * this view exists to prevent. It is the same trade `CodeEditor` makes for its
- * scrollbar, with the same ceiling, which is why [MAX_ROWS] exists.
+ * One [EditorScrollState], shared by both panes, is what does that. They have
+ * the same number of rows, so a shared offset keeps every row beside its
+ * counterpart; and since each pane draws only the rows on screen, there is no
+ * longer a cap on how many rows a diff may show.
  */
 @Composable
 internal fun DiffView(diff: DiffResult, contentType: String = "") {
-    val vertical = rememberScrollState()
-    val shown = remember(diff) { diff.rows.take(MAX_ROWS) }
-    val clipped = diff.rows.size > shown.size
+    val scroll = remember(diff) { EditorScrollState() }
     val added = diff.rows.count { it.kind == DiffKind.ADDED }
     val removed = diff.rows.count { it.kind == DiffKind.REMOVED }
     val changed = diff.rows.count { it.kind == DiffKind.CHANGED }
@@ -241,26 +236,15 @@ internal fun DiffView(diff: DiffResult, contentType: String = "") {
                     color = P.warn, style = Typo.caption, family = P.Ui,
                 )
             }
-            if (clipped) {
-                Spacer(Modifier.width(12.dp))
-                PzText(
-                    "showing the first ${shown.size} rows of ${diff.rows.size}",
-                    color = P.warn, style = Typo.caption, family = P.Ui,
-                )
-            }
         }
 
-        Box(Modifier.weight(1f).fillMaxWidth()) {
-            Box(Modifier.fillMaxSize().background(P.bg).verticalScroll(vertical)) {
-                Row(Modifier.fillMaxWidth()) {
-                    DiffPane(
-                        shown, DiffSide.LEFT, contentType,
-                        Modifier.weight(1f).rightBorder(P.line),
-                    )
-                    DiffPane(shown, DiffSide.RIGHT, contentType, Modifier.weight(1f))
-                }
-            }
-            VScrollbar(vertical, Modifier.align(Alignment.CenterEnd).fillMaxHeight())
+        Row(Modifier.weight(1f).fillMaxWidth().background(P.bg)) {
+            DiffPane(
+                diff.rows, DiffSide.LEFT, contentType, scroll,
+                Modifier.weight(1f).fillMaxHeight().rightBorder(P.line),
+                verticalScrollbar = false,
+            )
+            DiffPane(diff.rows, DiffSide.RIGHT, contentType, scroll, Modifier.weight(1f).fillMaxHeight())
         }
     }
 }
@@ -275,18 +259,6 @@ private fun Empty(text: String) {
         PzText(text, color = P.faint, style = Typo.label, family = P.Ui)
     }
 }
-
-/**
- * How many aligned rows the view will lay out.
- *
- * Both panes are measured at their documents' full height so that one scroll
- * governs both, and `CodeEditor` records where that stops working: past roughly
- * ten thousand laid-out lines the editor runs out of heap, and past forty
- * thousand `Constraints` cannot represent the height at all. Two documents
- * share that budget here, so the cap is the same 2,000 its scrollbar uses, and
- * the counts bar says when a diff has been clipped to it.
- */
-private const val MAX_ROWS = 2_000
 
 /** How many recent flows the pickers offer. */
 private const val CANDIDATE_LIMIT = 200

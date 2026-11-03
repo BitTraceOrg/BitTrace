@@ -246,6 +246,9 @@ compose.desktop {
                 "java.sql",
                 "java.xml",
                 "jdk.crypto.ec",
+                // The in-app MCP server (mcp/McpServer.kt) runs on the JDK's
+                // own HTTP server, which lives in a module of its own.
+                "jdk.httpserver",
                 "jdk.unsupported",
             )
             // Msi + Exe installers; `createDistributable` also yields a runnable

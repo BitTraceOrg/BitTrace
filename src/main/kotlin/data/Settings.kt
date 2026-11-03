@@ -17,6 +17,13 @@ data class Settings(
      * tunnel and handshake. Anything unrecognised reads as basic.
      */
     val proxyCaptureMode: String = "basic",
+    /**
+     * Whether the in-app MCP server runs, letting an agent list captured flows
+     * and read them by id. Loopback only. Read at startup.
+     */
+    val mcpEnabled: Boolean = true,
+    /** Port the MCP server listens on, at `http://127.0.0.1:<port>/mcp`. */
+    val mcpPort: Int = 8890,
     /** Height of the inspector pane, in dp. */
     val inspectorHeightDp: Float = 320f,
     /** Width of the inspector in the horizontal layout, in dp. */

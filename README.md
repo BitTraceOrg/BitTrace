@@ -112,6 +112,30 @@ against internals that are free to change. It offers:
 
 External plugins load as JARs through `ServiceLoader`.
 
+### MCP server
+
+While the app is running, it serves the captured traffic to agents over the
+[Model Context Protocol](https://modelcontextprotocol.io), on
+`http://127.0.0.1:8890/mcp` (Streamable HTTP, loopback only). Connect Claude
+Code with:
+
+```
+claude mcp add --transport http bittrace http://127.0.0.1:8890/mcp
+```
+
+It has two tools:
+
+- **`list_flows`** lists every intercepted flow, oldest first, with its id,
+  method, URL, status, timing and sizes. It takes an optional `filter`
+  (a substring of the method or URL), plus `limit` and `offset`.
+- **`get_flow`** takes an `id` and returns that flow's full request and
+  response: headers, cookies, query, timings and bodies. A body comes back as
+  UTF-8 text, or as base64 when it is binary, and is truncated at `maxBodyBytes`
+  (256 KiB by default).
+
+The server can be switched off and its port changed under **Settings → Proxy**.
+Changes take effect the next time the app starts.
+
 ## Running it
 
 Requires a JDK 25 toolchain. Gradle will fetch one if you don't have it.

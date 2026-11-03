@@ -76,6 +76,9 @@ import org.bittrace.plugin.flow.FlowActionPlugin
 import org.bittrace.plugin.importer.RequestImporter
 import org.bittrace.proxy.CaptureMode
 import org.bittrace.proxy.ProxyService
+import org.bittrace.proxy.BodySide
+import org.bittrace.mcp.McpServer
+import org.bittrace.mcp.McpTools
 import org.bittrace.session.HarExporter
 import org.bittrace.session.HarImporter
 import org.bittrace.ui.BitTraceTheme
@@ -112,6 +115,12 @@ fun main() = application {
     val importers = remember { registry.importers }
     val collectionActions = remember { registry.collectionActions }
     val flowActions = remember { registry.flowActions }
+    val mcp = remember {
+        McpServer(
+            McpTools(store) { id, request -> service.body(id, if (request) BodySide.REQUEST else BodySide.RESPONSE) },
+            port = settings.settings.mcpPort,
+        )
+    }
 
     // Start the sidecar off the UI thread; stop it when the app closes.
     DisposableEffect(Unit) {
@@ -122,7 +131,14 @@ fun main() = application {
                 .onSuccess { logs.add("info", "proxy", "listening on 127.0.0.1:$port (${mode.id} capture)") }
                 .onFailure { logs.add("error", "proxy", "start failed: ${it.message}") }
         }
-        onDispose { service.stop(); activity.flush() }
+        // The MCP server reads the same store; a port already taken is
+        // reported and otherwise ignored — capture works without it.
+        if (settings.settings.mcpEnabled) {
+            runCatching { mcp.start() }
+                .onSuccess { logs.add("info", "mcp", "MCP server on http://127.0.0.1:${mcp.boundPort}/mcp") }
+                .onFailure { logs.add("error", "mcp", "MCP server failed to start: ${it.message}") }
+        }
+        onDispose { mcp.stop(); service.stop(); activity.flush() }
     }
 
     // The tally is written on a timer as well as on exit: a proxy gets killed

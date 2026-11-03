@@ -133,6 +133,7 @@ results land back on the event thread.
 | `ui/components/` | The shared widget vocabulary, plus the window chrome every screen sits inside |
 | `ui/layouts/<screen>/` | One screen's entry composable, with `components/` beside it for the parts only that screen uses |
 | `plugin/` | Plugin discovery and the bundled plugins |
+| `mcp/` | The MCP server that hands captured flows to agents |
 
 **The line is reuse, and it is now drawn by the folder.** A composable used from
 more than one screen lives in `ui/components/`; one that only its own screen
@@ -167,6 +168,24 @@ The practical test when adding a composable: if a second screen would want it,
 put it in `ui/` and give it a file; otherwise leave it beside its caller.
 
 ## Key seams
+
+### `mcp/`: the traffic, for agents
+
+`McpServer` serves the Model Context Protocol over Streamable HTTP on loopback.
+It runs **inside the app** rather than as a stdio process beside it, because
+the flows it reports exist only in this heap. `McpTools` holds the two tools,
+`list_flows` and `get_flow`, and has no knowledge of HTTP, so tests can drive it
+directly. It reads `SessionStore` on the event thread, the same rule every other
+reader follows, and reads bodies through the same `(id, side)` lookup the
+Inspector uses.
+
+It is hand-rolled on `com.sun.net.httpserver` rather than built on the MCP SDK.
+The server only ever answers requests and never pushes anything to the client,
+so the SSE half of the transport is never needed. What is left is a few JSON-RPC
+methods, which is less to carry than Ktor. The one cost is that
+`jdk.httpserver` has to be listed in the jlink modules. Requests that carry a
+non-loopback `Origin` are refused: captured traffic includes cookies and
+tokens, and a web page must not be able to reach it through DNS rebinding.
 
 ### `DataGrid` — one grid, two callers
 

@@ -290,8 +290,41 @@ private fun ProxyPane(settings: SettingsStore, service: ProxyService) = Pane(Cat
 
     CaptureModeSection(settings, service)
 
+    McpSection(settings)
+
     Spacer(Modifier.height(2.dp))
     CertificateSection()
+}
+
+/**
+ * The in-app MCP server, which lets an agent list captured flows and read one
+ * by id. Read once at startup, so both settings say they apply on restart
+ * rather than pretending to take effect now.
+ */
+@Composable
+private fun McpSection(settings: SettingsStore) {
+    val current = settings.settings
+    var portText by remember(current.mcpPort) { mutableStateOf(current.mcpPort.toString()) }
+    val valid = portText.toIntOrNull()?.let { it in 1..65535 } == true
+
+    SettingField("MCP server") {
+        CheckBox(current.mcpEnabled) { on -> settings.update { it.copy(mcpEnabled = on) } }
+    }
+    SettingField("MCP port") {
+        TextInput(
+            value = portText,
+            onValueChange = { s -> if (s.all { it.isDigit() } && s.length <= 5) portText = s },
+            modifier = Modifier.width(100.dp),
+        )
+        Spacer(Modifier.width(10.dp))
+        PrimaryButton("Save", enabled = valid && portText.toInt() != current.mcpPort) {
+            settings.update { it.copy(mcpPort = portText.toInt()) }
+        }
+    }
+    Hint(
+        "Applies on next launch. Connect an agent with " +
+            "claude mcp add --transport http bittrace http://127.0.0.1:${current.mcpPort}/mcp",
+    )
 }
 
 /**

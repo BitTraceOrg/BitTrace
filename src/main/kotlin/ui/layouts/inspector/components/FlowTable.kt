@@ -1,5 +1,6 @@
 package org.bittrace.ui.layouts.inspector.components
 
+import org.bittrace.rules.RuleSeed
 import org.bittrace.ui.bytesStr
 import org.bittrace.ui.durStr
 import org.bittrace.ui.endStr
@@ -354,6 +355,8 @@ fun FlowTable(
     /** Opens the diff tool on the two marked flows. Null until there are two. */
     onDiffMarked: (() -> Unit)?,
     onNotice: (String) -> Unit,
+    /** Starts a traffic rule from a row; null leaves the rule entries out of the menu. */
+    onRuleFromFlow: ((TrafficRow, RuleSeed) -> Unit)? = null,
     onSelect: (String) -> Unit,
     /** The overview band's facets, which three of these columns edit in place. */
     boundFacets: GridFacetBinding,
@@ -428,6 +431,22 @@ fun FlowTable(
                     if (onDiffMarked != null) "Diff the 2 marked flows" else "Diff — mark 2 flows first",
                     if (onDiffMarked != null) P.text else P.faint,
                 )
+            }
+
+            // Rules that start from this flow. They open the Rules tool on what
+            // they made, because a rule matching this exact request is a
+            // starting point to widen, not something to apply unseen.
+            if (onRuleFromFlow != null && !row.isConnect) {
+                separator()
+                val hasResponse = row.response?.response?.status?.let { it in 100..999 } == true
+                RuleSeed.entries.forEach { seed ->
+                    val enabled = seed != RuleSeed.MOCK_RESPONSE || hasResponse
+                    selectableItem(
+                        selected = false,
+                        enabled = enabled,
+                        onClick = { onRuleFromFlow(row, seed) },
+                    ) { CellText(seed.label, if (enabled) P.text else P.faint) }
+                }
             }
 
             // Plugin items, below the app's own. Built on open rather than per

@@ -48,6 +48,41 @@ object Tags {
 
     /** One hop's handshake finished or failed. Advanced capture only. */
     const val TLS_HANDSHAKE = 14
+
+    /**
+     * The outcome of one attempt to load a rule file or the manifest — sent
+     * for every attempt, so a rule that did not parse is visible rather than
+     * looking active. See [org.bittrace.rules].
+     */
+    const val RULE_STATUS = 15
+
+    /** A flow paused at a breakpoint; the body segment is that side's decoded body. */
+    const val BREAKPOINT_HIT = 16
+
+    /** A paused flow went on: resumed, timed out, or its client or this app went away. */
+    const val BREAKPOINT_RELEASED = 17
+}
+
+/**
+ * Tags for the frames this end writes to the sidecar's stdin — a separate
+ * numbering space, matching `core.Identifiers.Commands`. Rules are files, so
+ * most commands only say which one to re-read; see [ControlChannel].
+ */
+object Commands {
+    /** Re-read `<rules-dir>/<id>.yaml`. json: `{id}` */
+    const val RULE_CHANGED = 1
+
+    /** Forget a rule. json: `{id}` */
+    const val RULE_REMOVED = 2
+
+    /** Re-read `rules.yaml`: order, enabled flags, switches. json: `{}` */
+    const val RULES_ORDER = 3
+
+    /** Re-read the whole folder. json: `{}` */
+    const val RULES_RELOAD = 4
+
+    /** Release a paused flow; body = the replacement body, when there is one. */
+    const val BREAKPOINT_RESUME = 5
 }
 
 /**
@@ -129,4 +164,29 @@ object FrameReader {
             ((this[at + 1].toInt() and 0xFF) shl 8) or
             ((this[at + 2].toInt() and 0xFF) shl 16) or
             ((this[at + 3].toInt() and 0xFF) shl 24)
+}
+
+/**
+ * Writes frames in the layout [FrameReader] reads — the direction BitTrace ->
+ * sidecar uses the same framing, so one description of it covers both.
+ */
+object FrameWriter {
+    fun write(out: java.io.OutputStream, tag: Int, json: ByteArray, body: ByteArray = ByteArray(0)) {
+        val header = ByteArray(9)
+        header[0] = tag.toByte()
+        header.writeLeInt(1, json.size)
+        header.writeLeInt(5, body.size)
+        out.write(FrameReader.MAGIC)
+        out.write(header)
+        if (json.isNotEmpty()) out.write(json)
+        if (body.isNotEmpty()) out.write(body)
+        out.flush()
+    }
+
+    private fun ByteArray.writeLeInt(at: Int, value: Int) {
+        this[at] = value.toByte()
+        this[at + 1] = (value ushr 8).toByte()
+        this[at + 2] = (value ushr 16).toByte()
+        this[at + 3] = (value ushr 24).toByte()
+    }
 }

@@ -1,0 +1,16 @@
+enabled: true
+breakpointTimeoutSec: 300
+kinds:
+  rewrite: true
+  mapLocal: true
+  mapRemote: true
+  breakpoint: true
+rules:
+  - id: add-header
+    enabled: true
+  - id: mock-users
+    enabled: true
+  - id: to-staging
+    enabled: false
+  - id: pause-login
+    enabled: true

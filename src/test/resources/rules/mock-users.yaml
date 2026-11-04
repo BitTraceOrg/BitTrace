@@ -1,0 +1,13 @@
+name: "Users from disk"
+kind: mapLocal
+match:
+  methods:
+    - "GET"
+  host: "api.example.com"
+  path: "/users/*"
+mapLocal:
+  path: "mocks/mock-users"
+  status: 200
+  headers:
+    - name: "Cache-Control"
+      value: "no-store"

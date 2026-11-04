@@ -16,6 +16,8 @@ import org.bittrace.data.TlsHandshakeData
 import org.bittrace.data.WebSocketEndData
 import org.bittrace.data.WebSocketMessageData
 import org.bittrace.data.WebSocketRecord
+import org.bittrace.rules.BreakpointQueue
+import org.bittrace.rules.RuleStore
 
 /**
  * Ties the sidecar to the app: traffic metadata goes into [store], raw bodies
@@ -31,9 +33,27 @@ class ProxyService(
     val bodies: BodyCache = BodyCache(),
     private val onLog: (LogEntry) -> Unit = {},
     private val onExit: (Int) -> Unit = {},
+    /**
+     * The traffic rules. Their folder is handed to every sidecar this starts,
+     * and their changes go to whichever one is running; null runs without rules.
+     */
+    val rules: RuleStore? = null,
 ) {
 
+    @Volatile
     private var process: ProxyProcess? = null
+
+    /** Commands to the running sidecar; dropped while none is running. */
+    private fun send(tag: Int, json: String, body: ByteArray = ByteArray(0)) {
+        process?.control?.send(tag, json, body)
+    }
+
+    /** Flows the running sidecar is holding at a breakpoint. */
+    val breakpoints = BreakpointQueue(::send)
+
+    init {
+        rules?.notify = { tag, json -> send(tag, json) }
+    }
 
     /** Rebuilds bodies that arrive as chunks; see [StreamedBodies]. */
     private val streamed = StreamedBodies(onLog = { onLog(it) })
@@ -93,7 +113,7 @@ class ProxyService(
     fun start(port: Int, mode: CaptureMode = CaptureMode.BASIC) {
         check(!isRunning) { "proxy already running" }
         ProxyProcess.killOrphans(onLog)
-        ProxyProcess(port.toString(), listener, mode).also {
+        ProxyProcess(port.toString(), listener, mode, rules?.dir?.toFile()).also {
             process = it
             it.start()
         }
@@ -101,6 +121,7 @@ class ProxyService(
 
     fun stop(): Int? {
         val code = process?.stop()
+        breakpoints.clear()
         onUi { status = null }
         reportedDrops = 0
         reportedPortLost = false
@@ -313,10 +334,22 @@ class ProxyService(
             }
         }
 
+        override fun onRuleStatus(data: RuleStatusData) {
+            rules?.onStatus(data)
+        }
+
+        override fun onBreakpointHit(data: BreakpointHitData, body: ByteArray) =
+            breakpoints.onBreakpointHit(data, body)
+
+        override fun onBreakpointReleased(data: BreakpointReleasedData) =
+            breakpoints.onBreakpointReleased(data)
+
         override fun onStderr(line: String) =
             this@ProxyService.onLog(LogEntry("error", "sidecar", line))
 
-        override fun onExit(exitCode: Int) =
+        override fun onExit(exitCode: Int) {
+            breakpoints.clear()
             this@ProxyService.onExit(exitCode)
+        }
     }
 }

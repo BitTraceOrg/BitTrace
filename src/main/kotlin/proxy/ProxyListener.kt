@@ -83,6 +83,15 @@ interface ProxyListener {
      */
     fun onStatus(status: ProxyStatus) {}
 
+    /** The sidecar tried to load a rule file or the manifest; see [RuleStatusData]. */
+    fun onRuleStatus(data: RuleStatusData) {}
+
+    /** A flow paused at a breakpoint; [body] is that side's decoded body. */
+    fun onBreakpointHit(data: BreakpointHitData, body: ByteArray) {}
+
+    /** A paused flow went on, whoever let it. */
+    fun onBreakpointReleased(data: BreakpointReleasedData) {}
+
     /** A line the sidecar wrote to stderr. */
     fun onStderr(line: String) {}
 

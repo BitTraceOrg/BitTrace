@@ -134,6 +134,21 @@ data class InitialResponseData(
 // Complete messages  (emitted after full body is available)
 // ---------------------------------------------------------------------------
 
+/**
+ * A traffic rule that changed (or paused) a flow, as the sidecar reports it on
+ * the `Complete*` frames. [side] is the hook it ran on — `request` or
+ * `response` — and [detail] what it resolved to where that is worth showing:
+ * the file a Map local served, the URL a Map remote sent the request to.
+ */
+@Serializable
+data class AppliedRule(
+    val id: String,
+    val name: String = "",
+    val kind: String = "",
+    val side: String = "",
+    val detail: String = "",
+)
+
 /** Emitted on `request`. Contains headers, cookies, and optional postData. */
 @Serializable
 data class CompleteRequestMessage(
@@ -145,6 +160,15 @@ data class CompleteRequestMessage(
      * [org.bittrace.proxy.StreamedBodies].
      */
     @SerialName("_bodyStreamed") val bodyStreamed: Boolean = false,
+    /** Rules that changed the request, in the order they ran. Empty for most flows. */
+    @SerialName("_rules") val rules: List<AppliedRule> = emptyList(),
+    /**
+     * `local` or `remote` when a Map rule took the request somewhere else;
+     * the grid keeps the URL the client asked for and [mappedTo] says where it
+     * went instead (`file://…` for Map local).
+     */
+    @SerialName("_mapped") val mapped: String? = null,
+    @SerialName("_mappedTo") val mappedTo: String? = null,
 ) {
     @Serializable
     data class RequestBody(
@@ -182,6 +206,10 @@ data class CompleteResponseMessage(
      * on the wire. See [org.bittrace.proxy.StreamedBodies].
      */
     @SerialName("_bodyStreamed") val bodyStreamed: Boolean = false,
+    /** Every rule that changed the flow, both sides. See [CompleteRequestMessage.rules]. */
+    @SerialName("_rules") val rules: List<AppliedRule> = emptyList(),
+    @SerialName("_mapped") val mapped: String? = null,
+    @SerialName("_mappedTo") val mappedTo: String? = null,
 ) {
     @Serializable
     data class ResponseBody(

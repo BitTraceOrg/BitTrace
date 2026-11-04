@@ -24,10 +24,11 @@ import org.bittrace.data.WebSocketMessageData
 /**
  * Runs the MITMConnect sidecar and turns its stdout into typed traffic events.
  *
- * Kotlin equivalent of `src-tauri/proxy/src/proxy.rs`. The sidecar is spawned
- * with the listen port, plus `--advanced` under [CaptureMode.ADVANCED]; stdout carries the binary frame
- * protocol (see [FrameReader]) and stderr carries plain log lines. Each stream
- * is drained by its own daemon thread, so neither can block the other or the
+ * The sidecar is spawned with the listen port, plus `--advanced` under
+ * [CaptureMode.ADVANCED], and the rules folder in `MITMCONNECT_RULES_DIR`; stdout
+ * carries the binary frame protocol (see [FrameReader]), stderr carries plain
+ * log lines, and stdin carries commands back ([control]). Each output stream is
+ * drained by its own daemon thread, so neither can block the other or the
  * caller.
  *
  * The binary itself ships as a classpath resource and is unpacked on demand;
@@ -36,11 +37,14 @@ import org.bittrace.data.WebSocketMessageData
  * @param port the port passed to the sidecar
  * @param listener receives decoded frames; called on the reader threads
  * @param mode the capture profile; fixed for the life of the process
+ * @param rulesDir the traffic rules folder the sidecar reads at start, or null
+ *   for none (see [org.bittrace.rules.RuleStore])
  */
 class ProxyProcess(
     private val port: String,
     private val listener: ProxyListener,
     val mode: CaptureMode = CaptureMode.BASIC,
+    private val rulesDir: File? = null,
 ) {
 
     private val json = Json {
@@ -53,6 +57,10 @@ class ProxyProcess(
     private val startedAt = AtomicReference<Instant?>()
     private val lastStatus = AtomicReference<ProxyStatus?>()
     private val lastStatusAt = AtomicReference<Instant?>()
+    private val controlRef = AtomicReference<ControlChannel?>()
+
+    /** Commands to the running sidecar; null before [start] and after [stop]. */
+    val control: ControlChannel? get() = controlRef.get()
 
     /** The unpacked executable this instance will run, extracting it if needed. */
     val executable: File get() = SidecarBinary.resolve().toFile()
@@ -103,20 +111,29 @@ class ProxyProcess(
         // Piping both streams also keeps the console-subsystem sidecar from
         // getting a window of its own, which is what CREATE_NO_WINDOW does on
         // the Rust side.
-        val process = ProcessBuilder(listOf(binary.absolutePath, port) + mode.args)
+        val builder = ProcessBuilder(listOf(binary.absolutePath, port) + mode.args)
+        // The environment rather than `--rules-dir`: a sidecar built before
+        // rules existed ignores a variable it does not know, where its argparse
+        // would refuse the flag and exit before binding the port.
+        rulesDir?.let { builder.environment()["MITMCONNECT_RULES_DIR"] = it.absolutePath }
+        val process = builder
             .directory(binary.parentFile)
-            .redirectInput(ProcessBuilder.Redirect.from(nullFile()))
+            // A pipe rather than NUL: stdin is how a changed rule is announced
+            // and a paused flow released. See ControlChannel.
+            .redirectInput(ProcessBuilder.Redirect.PIPE)
             .redirectOutput(ProcessBuilder.Redirect.PIPE)
             .redirectError(ProcessBuilder.Redirect.PIPE)
             .start()
 
         processRef.set(process)
+        controlRef.set(ControlChannel(process.outputStream, listener::onLog))
 
         thread("proxy-stdout") { readFrames(process.inputStream) }
         thread("proxy-stderr") { readStderr(process.errorStream) }
         thread("proxy-waiter") {
             val code = process.waitFor()
             processRef.compareAndSet(process, null)
+            controlRef.getAndSet(null)?.close()
             listener.onExit(code)
         }
 
@@ -134,6 +151,7 @@ class ProxyProcess(
             killReportedProcess()
             return null
         }
+        controlRef.getAndSet(null)?.close()
         process.destroy()
         if (!process.waitFor(graceMillis, TimeUnit.MILLISECONDS)) {
             process.destroyForcibly().waitFor()
@@ -273,6 +291,18 @@ class ProxyProcess(
                     listener.onStatus(status)
                 }
 
+            Tags.RULE_STATUS ->
+                decode<RuleStatusData>("proxy-rule-status", frame.json)
+                    ?.let(listener::onRuleStatus)
+
+            Tags.BREAKPOINT_HIT ->
+                decode<BreakpointHitData>("proxy-breakpoint-hit", frame.json)
+                    ?.let { listener.onBreakpointHit(it, frame.body) }
+
+            Tags.BREAKPOINT_RELEASED ->
+                decode<BreakpointReleasedData>("proxy-breakpoint-released", frame.json)
+                    ?.let(listener::onBreakpointReleased)
+
             else -> logError("unknown frame tag: ${frame.tag}")
         }
     }
@@ -328,8 +358,6 @@ class ProxyProcess(
     }
 
     companion object {
-        private fun nullFile(): File = File(if (SidecarBinary.isWindows) "NUL" else "/dev/null")
-
         /** How long a killed orphan is given to actually go away. */
         private const val REAP_MILLIS = 2_000L
 

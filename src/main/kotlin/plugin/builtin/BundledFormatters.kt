@@ -190,23 +190,30 @@ class GraphQlFormatter : HighlightedFormatter() {
     override fun format(bytes: ByteArray, mimeType: String): String {
         val text = textOrNull(bytes)?.trim() ?: return "Body is not text."
         if (text.isEmpty()) return ""
-        // GraphQL is very often POSTed as JSON ({query, variables}); pull the
-        // document out so the chip does something useful there too.
-        val document = queryFromJsonEnvelope(text) ?: text
-        return indentCode(document, STYLE)
+        // GraphQL is very often POSTed as JSON ({query, variables}), and
+        // sometimes as a batch of those; pull each document out, with what
+        // travels beside it, so the chip does something useful there too.
+        val operations = graphQlOperations(text) ?: return indentCode(text, STYLE)
+        return operations.withIndex().joinToString("\n\n") { (i, op) ->
+            buildString {
+                if (operations.size > 1) append("# operation ${i + 1} of ${operations.size}\n")
+                append("# ${op.kind} ${op.name ?: "(anonymous)"}\n")
+                append(indentCode(op.query, STYLE))
+                op.variables?.let { vars ->
+                    // As comment lines, so the GraphQL lexer reads them as
+                    // metadata about the document rather than part of it.
+                    append("\n\n# variables\n")
+                    prettyJson.encodeToString(JsonElement.serializer(), vars).lines()
+                        .forEach { append("# ").append(it).append('\n') }
+                }
+            }.trimEnd()
+        }
     }
 
     override fun spansOf(text: String) = highlightGraphQl(text)
 
-    /** Returns the `query` field of a `{"query": "...", …}` envelope, if any. */
-    private fun queryFromJsonEnvelope(text: String): String? = try {
-        val obj = Json.parseToJsonElement(text) as? JsonObject
-        (obj?.get("query") as? JsonPrimitive)?.content
-    } catch (e: Exception) {
-        null
-    }
-
     private companion object {
+        val prettyJson = Json { prettyPrint = true }
         val STYLE = CodeStyle(
             lineComments = listOf("#"),
             blockComments = false,
@@ -216,3 +223,42 @@ class GraphQlFormatter : HighlightedFormatter() {
         )
     }
 }
+
+/** One operation from a GraphQL request body. */
+class GraphQlOperation(
+    val query: String,
+    /** `operationName`, or the name the document gives its operation. */
+    val name: String?,
+    /** `query`, `mutation` or `subscription`. */
+    val kind: String,
+    val variables: JsonElement?,
+)
+
+/**
+ * The operations in a JSON GraphQL request — one `{query, operationName,
+ * variables}` envelope, or a batch array of them — or null when [text] is not
+ * one. A body that is a bare GraphQL document is not handled here; the
+ * formatter shows it as it is.
+ */
+fun graphQlOperations(text: String): List<GraphQlOperation>? {
+    val root = runCatching { Json.parseToJsonElement(text) }.getOrNull() ?: return null
+    val envelopes = when (root) {
+        is JsonObject -> listOf(root)
+        is kotlinx.serialization.json.JsonArray -> root.map { it as? JsonObject ?: return null }
+        else -> return null
+    }
+    if (envelopes.isEmpty()) return null
+    return envelopes.map { env ->
+        val query = (env["query"] as? JsonPrimitive)?.takeIf { it.isString }?.content ?: return null
+        val declared = DECLARED_OPERATION.find(query)
+        GraphQlOperation(
+            query = query,
+            name = (env["operationName"] as? JsonPrimitive)?.takeIf { it.isString }?.content?.takeIf { it.isNotBlank() }
+                ?: declared?.groupValues?.get(2)?.takeIf { it.isNotEmpty() },
+            kind = declared?.groupValues?.get(1) ?: "query",
+            variables = env["variables"]?.takeIf { it !is kotlinx.serialization.json.JsonNull },
+        )
+    }
+}
+
+private val DECLARED_OPERATION = Regex("""\b(query|mutation|subscription)\b\s*([_A-Za-z][_0-9A-Za-z]*)?""")

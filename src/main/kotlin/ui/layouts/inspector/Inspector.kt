@@ -68,6 +68,9 @@ import org.bittrace.data.TrafficRow
 import org.bittrace.plugin.format.BodyFormatter
 import org.bittrace.plugin.format.FormattedBody
 import org.bittrace.proxy.BodySide
+import org.bittrace.plugin.builtin.findJwts
+import org.bittrace.plugin.builtin.graphQlOperations
+import org.bittrace.plugin.builtin.relativeTo
 import org.bittrace.ui.components.CellText
 import org.bittrace.ui.components.Format
 import org.bittrace.ui.components.FormatPicker
@@ -323,8 +326,11 @@ private fun Pane(
                         CompositionLocalProvider(LocalContextMenuRepresentation provides NoContextMenu) {
                             SelectionContainer {
                                 when (tab) {
-                                    "Overview" -> FlowOverview(row, side)
-                                    "Headers" -> Kv(headersOf(row, side))
+                                    "Overview" -> FlowOverview(row, side, bodyProvider)
+                                    "Headers" -> Column {
+                                        Kv(headersOf(row, side))
+                                        JwtTokens(row, side)
+                                    }
                                     "Form" -> WebForm(row, bodyProvider)
                                     "Cookies" -> Cookies(row, side)
                                     "Timing" -> Timing(row)
@@ -452,12 +458,12 @@ private fun MetaGrid(cells: List<Triple<String, String, Color>>) {
 // --- overview (side-specific: only data relevant to that half) ---
 
 @Composable
-private fun FlowOverview(row: TrafficRow, side: BodySide) {
-    if (side == BodySide.REQUEST) RequestOverview(row) else ResponseOverview(row)
+private fun FlowOverview(row: TrafficRow, side: BodySide, bodyProvider: (String, BodySide) -> ByteArray?) {
+    if (side == BodySide.REQUEST) RequestOverview(row, bodyProvider) else ResponseOverview(row)
 }
 
 @Composable
-private fun RequestOverview(row: TrafficRow) {
+private fun RequestOverview(row: TrafficRow, bodyProvider: (String, BodySide) -> ByteArray?) {
     val r = row.request.request
     val (host, path) = hostPath(r.url)
     val https = tlsText(row) != "—"
@@ -477,6 +483,78 @@ private fun RequestOverview(row: TrafficRow) {
         KvRow("content type", reqMime)
         KvRow("query params", r.queryString.size.toString())
         KvRow("cookies", row.completeRequest?.request?.cookies?.size?.toString() ?: "—")
+
+        GraphQlSummary(row, bodyProvider)
+    }
+}
+
+/**
+ * The operation a GraphQL request carries, so a screen of identical
+ * `POST /graphql` rows can be told apart without opening each body.
+ *
+ * Parsed in composition, which is why it is bounded: one JSON parse of a body
+ * under a megabyte, keyed on the flow and the body's size so it runs once per
+ * flow rather than once per frame.
+ */
+@Composable
+private fun GraphQlSummary(row: TrafficRow, bodyProvider: (String, BodySide) -> ByteArray?) {
+    val size = row.requestBodySize
+    val operations = remember(row.id, size) {
+        if (size <= 0 || size > GRAPHQL_PARSE_LIMIT) return@remember null
+        val bytes = bodyProvider(row.id, BodySide.REQUEST) ?: return@remember null
+        if (bytes.size > GRAPHQL_PARSE_LIMIT) return@remember null
+        val text = String(bytes, Charsets.UTF_8).trim()
+        if (!text.startsWith('{') && !text.startsWith('[')) null else graphQlOperations(text)
+    } ?: return
+    Section("GraphQL")
+    operations.forEach { op ->
+        KvRow(op.kind, op.name ?: "(anonymous)", P.info)
+    }
+    if (operations.size > 1) KvRow("batch", "${operations.size} operations")
+}
+
+private const val GRAPHQL_PARSE_LIMIT = 1L shl 20
+
+/**
+ * Every JSON Web Token on this side's headers and cookies, decoded.
+ *
+ * Unverified, and labelled so: the signing key is the issuer's, and a proxy
+ * never has it. What this is for is reading the claims — who the token is for,
+ * what it grants, and above all whether it has already expired, which is the
+ * usual answer to an unexplained 401.
+ */
+@Composable
+private fun JwtTokens(row: TrafficRow, side: BodySide) {
+    val sources: List<Pair<String, String>> = when (side) {
+        BodySide.REQUEST -> row.completeRequest?.request?.let { r ->
+            r.headers.map { "header ${it.name}" to it.value } + r.cookies.map { "cookie ${it.name}" to it.value }
+        }
+        BodySide.RESPONSE -> row.completeResponse?.response?.let { r ->
+            r.headers.map { "header ${it.name}" to it.value } + r.cookies.map { "cookie ${it.name}" to it.value }
+        }
+    } ?: return
+    val tokens = remember(row.id, side, sources.size) {
+        sources.flatMap { (where, value) -> findJwts(value).map { where to it } }
+            .distinctBy { it.second.raw }
+    }
+    if (tokens.isEmpty()) return
+    val now = java.time.Instant.now()
+    tokens.forEach { (where, jwt) ->
+        Section("JWT · $where")
+        KvRow("algorithm", listOfNotNull(jwt.alg, jwt.typ).joinToString(" · ").ifBlank { "—" })
+        KvRow(
+            "signature",
+            if (jwt.hasSignature) "present, not verified" else "none (unsigned)",
+            if (jwt.hasSignature) P.text else P.warn,
+        )
+        jwt.expiresAt?.let {
+            val expired = jwt.expired(now)
+            KvRow("expires", "$it (${if (expired) "expired " else ""}${relativeTo(it, now)})", if (expired) P.err else P.ok)
+        }
+        jwt.issuedAt?.let { KvRow("issued", "$it (${relativeTo(it, now)})") }
+        jwt.notBefore?.let { KvRow("not before", "$it (${relativeTo(it, now)})", if (it.isAfter(now)) P.warn else P.text) }
+        KvRow("header", jwt.headerJson)
+        KvRow("payload", jwt.payloadJson)
     }
 }
 

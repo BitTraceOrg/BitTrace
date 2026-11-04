@@ -31,6 +31,13 @@ went.
 - **An inspector** with Overview, Body, Cookies, Headers, Raw and Timing
   views, pluggable body formatters, and a persisted split. The same pane renders
   captured flows, imported HAR entries and API client responses.
+- **Decoders for what is hard to read raw.** JSON Web Tokens in headers and
+  cookies are decoded under the Headers tab, with their expiry shown against
+  the current time; signatures are not verified, since the proxy never has the
+  key. Protobuf and gRPC bodies decode without a schema, gRPC and gRPC-web
+  framing included. GraphQL requests show their operation name in the
+  Overview tab, and the GraphQL chip shows variables beside the query and
+  handles batched requests.
 - **A waterfall and phase timeline** for where a request actually spent its
   time.
 - **`CONNECT` tunnels as first-class flows.** mitmproxy answers `CONNECT`

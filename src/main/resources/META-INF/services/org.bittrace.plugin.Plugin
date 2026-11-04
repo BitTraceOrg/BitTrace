@@ -9,6 +9,8 @@ org.bittrace.plugin.builtin.CssFormatter
 org.bittrace.plugin.builtin.JsFormatter
 org.bittrace.plugin.builtin.TsFormatter
 org.bittrace.plugin.builtin.GraphQlFormatter
+org.bittrace.plugin.builtin.ProtobufFormatter
+org.bittrace.plugin.builtin.JwtFormatter
 org.bittrace.plugin.builtin.CurlImporter
 org.bittrace.plugin.builtin.BundledCollectionActions
 org.bittrace.plugin.builtin.BundledFlowActions

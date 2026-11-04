@@ -42,7 +42,11 @@ import org.bittrace.ui.layouts.home.HomeView
 import org.bittrace.ui.components.ImportRequestDialog
 import org.bittrace.ui.layouts.forge.components.ImportProjectDialog
 import org.bittrace.ui.components.NerdStats
+import org.bittrace.tools.BreakpointTool
 import org.bittrace.tools.DiffTool
+import org.bittrace.tools.RulesTool
+import org.bittrace.rules.RuleStore
+import org.bittrace.rules.ruleFromFlow
 import org.bittrace.tools.Tool
 import org.bittrace.tools.ToolWindow
 import org.bittrace.tools.ToolWindows
@@ -94,11 +98,15 @@ fun main() = application {
     val store = remember { SessionStore(onLiveFlow = activity::record) }
     val settings = remember { SettingsStore() }
     val logs = remember { LogStore() }
+    // Traffic rules live in their own folder beside settings.json; the sidecar
+    // is handed it at every start, so this has to exist before the service.
+    val rules = remember { RuleStore() }
     val service = remember {
         ProxyService(
             store = store,
             onLog = { e -> logs.add(e.level, e.source, e.message) },
             onExit = { code -> logs.add("info", "proxy", "sidecar exited ($code)") },
+            rules = rules,
         )
     }
     // Discover plugins (bundled + external JARs) once; derive the theme manager
@@ -262,6 +270,15 @@ private fun DecoratedWindowScope.App(
         }
     }
     val tools = remember { ToolWindows() }
+    // The rule the Rules tool is showing — hoisted so the grid's row menu can
+    // open the tool on a rule it just made.
+    var selectedRule by remember { mutableStateOf<String?>(null) }
+    // A pause nobody sees is a request that hangs until its timeout, so the
+    // breakpoint window opens itself on the first hit.
+    DisposableEffect(service) {
+        service.breakpoints.onHit = { tools.show(Tool.BREAKPOINTS) }
+        onDispose { service.breakpoints.onHit = {} }
+    }
     // Flows picked out for the diff tool. Two at most: marking a third drops the
     // oldest, so the pair is always the two you most recently asked for rather
     // than a set you have to clear before you can choose again.
@@ -448,6 +465,16 @@ private fun DecoratedWindowScope.App(
                             null
                         },
                         onNotice = { logs.add("warn", "ui", it) },
+                        onRuleFromFlow = service.rules?.let { ruleStore ->
+                            { row, seed ->
+                                runCatching { ruleFromFlow(ruleStore, row, seed, service::body) }
+                                    .onSuccess { id ->
+                                        selectedRule = id
+                                        tools.show(Tool.RULES)
+                                    }
+                                    .onFailure { logs.add("error", "rules", "could not make the rule: ${it.message}") }
+                            }
+                        },
                     ) { selectedId = it }
                     "home" -> Box(Modifier.fillMaxSize()) {
                         HomeView(store, service, activity, port) { nav = "traffic" }
@@ -496,6 +523,10 @@ private fun DecoratedWindowScope.App(
                         initial = markedIds.takeIf { it.size == 2 }?.let { it[0] to it[1] },
                         fallbackId = selectedId,
                     )
+                    Tool.RULES -> service.rules?.let { ruleStore ->
+                        RulesTool(ruleStore, selectedRule) { selectedRule = it }
+                    }
+                    Tool.BREAKPOINTS -> BreakpointTool(service.breakpoints)
                 }
             }
         }

@@ -1,0 +1,11 @@
+name: "Pause login"
+kind: breakpoint
+match:
+  methods:
+    - "POST"
+  path: "^/auth/(login|token)$"
+  pathRegex: true
+breakpoint:
+  request: true
+  response: true
+  includeApiClient: false

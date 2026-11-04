@@ -11,6 +11,8 @@ import androidx.compose.runtime.mutableStateListOf
  */
 enum class Tool(val id: String, val title: String) {
     DIFF("diff", "Diff"),
+    RULES("rules", "Rules"),
+    BREAKPOINTS("breakpoints", "Breakpoints"),
 }
 
 /**

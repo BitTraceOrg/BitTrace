@@ -1,0 +1,11 @@
+name: "Point at staging"
+kind: mapRemote
+match:
+  host: "api.example.com"
+  path: "/v1/*"
+mapRemote:
+  scheme: "https"
+  host: "staging.example.com"
+  port: 0
+  path: "/v2/*"
+  preserveHost: false

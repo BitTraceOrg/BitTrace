@@ -1,0 +1,20 @@
+name: "Tag API traffic"
+kind: rewrite
+match:
+  methods: []
+  schemes: []
+  host: "*.example.com"
+  port: 0
+  path: "/api/*"
+  pathRegex: false
+  query: ""
+rewrite:
+  - target: requestHeader
+    op: set
+    name: "X-Env"
+    value: "test"
+  - target: responseBody
+    op: replace
+    find: "\"live\""
+    value: "\"mocked\""
+    regex: false

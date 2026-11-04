@@ -133,6 +133,7 @@ results land back on the event thread.
 | `ui/components/` | The shared widget vocabulary, plus the window chrome every screen sits inside |
 | `ui/layouts/<screen>/` | One screen's entry composable, with `components/` beside it for the parts only that screen uses |
 | `plugin/` | Plugin discovery and the bundled plugins |
+| `rules/` | Traffic rules — Map local, Map remote, Rewrite, Breakpoints: the files, the store that writes them, the breakpoint queue |
 
 **The line is reuse, and it is now drawn by the folder.** A composable used from
 more than one screen lives in `ui/components/`; one that only its own screen
@@ -444,6 +445,72 @@ from the full captured message — cookies, timings, HTTP version, byte sizes �
 none of which the plugin-facing target carries, and shrinking the HAR export to
 fit one would be a real loss for a made-up symmetry. `BundledFlowActions` (Copy
 as fetch(), Copy response body) exercises the seam.
+
+## Traffic rules
+
+Map local, Map remote, Rewrite and Breakpoints are applied **in the sidecar**,
+because that is where the traffic is; this end owns the rules and the UI. The
+wire contract, the YAML schema and the order rules apply in are pinned in
+MITMConnect's `PROTOCOL.md`, "Traffic rules".
+
+**The rules are files, not messages.** `RuleStore` writes them into
+`BitTrace/rules/` — a `rules.yaml` manifest (order, enabled flags, the master
+and per-kind switches) plus one `<id>.yaml` per rule — and `ProxyProcess` names
+that folder in `MITMCONNECT_RULES_DIR`. An environment variable rather than a
+flag on purpose: a sidecar binary built before rules existed ignores it, where
+its argparse would refuse an unknown flag and exit before binding the port —
+so this build still captures with an old binary, it just applies no rules. The sidecar reads it before it binds its port, so
+no request gets past ahead of the rules and a restarted sidecar needs nothing
+resent. After that, stdin carries change notices: `RuleChanged {id}`,
+`RuleRemoved {id}`, `RulesOrder`, `RulesReload`. Every write is atomic
+(`writeAtomically`), since the sidecar may be reading while this end writes.
+The same choice collections made — plain YAML in plain folders — buys the same
+things: rules can be read, diffed, copied and edited by hand.
+
+That makes stdin a pipe now rather than `NUL`. `ControlChannel` is its one
+writer thread, the mirror of the sidecar's `FrameChannel`: a frame is several
+writes, the callers sit on the UI thread, and a pipe the sidecar has
+momentarily stopped draining must not block either. A write that fails closes
+the channel and later sends are dropped — harmless for rules, because they are
+on disk for the next sidecar to read.
+
+**Two kinds of error, kept apart.** `RuleStore.localErrors` is what kaml could
+not read; `RuleStore.status` is what the sidecar said on its `RuleStatus` frame,
+which it sends for *every* load attempt. They are separate because kaml writes
+these files and ruamel reads them, and the case worth showing is where the two
+disagree — a regex Kotlin accepts and Python's `re` refuses, say. A file the
+sidecar cannot load keeps its previous version in force; the Rules tool says so
+on the rule rather than letting it look active. The schema stays inside plain
+YAML for the same reason, and `src/test/resources/rules` is a copy of
+MITMConnect's `tests/fixtures/rules`, read by both test suites.
+
+**The editors hold text, not values.** `RuleForm` keeps every field as typed
+and turns it into a `RuleFile` once, on Save; bound straight to the parsed
+rule, `GET, ` would lose its comma on every keystroke. Rules otherwise take
+effect as they are changed — a toggle, a reorder — and only a rule's own fields
+wait for Save, because a half-typed host pattern applied to live traffic would
+match things it was never meant to.
+
+**Breakpoints** are the one round trip. `BreakpointHit` carries the paused
+message and its decoded body; `BreakpointQueue` holds it as snapshot state and
+opens the Breakpoints tool on the first hit — a pause nobody notices is a
+request that hangs until its timeout. The answer, `BreakpointResume`, carries
+only what was edited (headers as `Name: value` lines, via `HeaderText`) plus the
+new body when it changed. The sidecar is the authority on what is paused:
+`BreakpointReleased` removes a flow whatever let it go, the timeout and the
+client hanging up included, and a closed stdin releases everything.
+
+**What capture shows** is the flow after the rules ran — what went upstream and
+what the client got — because the sidecar's rules addon runs ahead of its
+capture addon. The grid keeps the URL the client asked for; `Complete*`
+messages carry `rules` (`_rules`), `mapped` and `mappedTo` for the rest.
+
+The row menu's rule entries (`RuleSeed`, `FlowRules`) match the flow's method,
+host and exact path — the narrowest rule that still catches the next identical
+request — and open the Rules tool on what they made. "Serve this response"
+writes the captured body to `rules/mocks/<id>/body` and a Map local rule
+pointing at it by a relative path, so the folder still works copied whole
+somewhere else.
 
 ## Filtering the grid
 
@@ -883,6 +950,7 @@ Everything sits beside `settings.json` under `%APPDATA%\BitTrace`
 
 ```
 BitTrace/
+  rules/             traffic rules: rules.yaml, one <id>.yaml per rule, mocks/
   settings.json      SettingsStore — debounced, whole-file
   history.yaml       HistoryStore  — distinct sent requests
   collections/       one folder per project, one per collection inside it,

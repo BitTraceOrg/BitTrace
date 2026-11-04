@@ -1,5 +1,6 @@
 package org.bittrace.ui.layouts.inspector
 
+import org.bittrace.rules.RuleSeed
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -70,6 +71,8 @@ fun TrafficView(
     onToggleMark: (TrafficRow) -> Unit,
     onDiffMarked: (() -> Unit)?,
     onNotice: (String) -> Unit,
+    /** Starts a traffic rule from a row; null hides the row menu's rule entries. */
+    onRuleFromFlow: ((TrafficRow, RuleSeed) -> Unit)? = null,
     onSelect: (String) -> Unit,
 ) {
     val rows = store.rows
@@ -114,7 +117,7 @@ fun TrafficView(
                 cols, filters, shown, rows, selectedId, banners,
                 bodyProvider = service::body, flowActions = flowActions,
                 marked = marked, onToggleMark = onToggleMark, onDiffMarked = onDiffMarked,
-                onNotice = onNotice, onSelect = onSelect,
+                onNotice = onNotice, onRuleFromFlow = onRuleFromFlow, onSelect = onSelect,
                 boundFacets = boundFacets,
             )
         }

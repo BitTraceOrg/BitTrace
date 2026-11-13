@@ -64,7 +64,7 @@ fun MarkdownText(text: String, modifier: Modifier = Modifier) {
         markdownBlockRenderer = renderer,
         // No syntax highlighting inside fenced blocks. The app has an editor
         // that does that, and wiring it in here would mean teaching Jewel's
-        // highlighter interface about KodeMirror's languages for the sake of a
+        // highlighter interface about the editor's languages for the sake of a
         // six-line JSON sample.
         codeHighlighter = NoOpCodeHighlighter,
         markdownProcessor = processor,

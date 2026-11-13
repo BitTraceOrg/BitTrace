@@ -308,7 +308,7 @@ private fun Pane(
                         // gutter. BODY keeps both — that tab is the one that
                         // exists to make a body readable.
                         is MonoContent.Code ->
-                            Mono(content.text, content.contentType, plain = tab == "Raw")
+                            Mono(content.text, content.contentType, plain = tab == "Raw" || content.plain)
                         // Only BODY ever produces one: RAW is the tab for
                         // seeing the bytes as they came, and a picture there
                         // would be the one place in the app that refused to
@@ -816,9 +816,15 @@ private fun WebForm(row: TrafficRow, bodyProvider: (String, BodySide) -> ByteArr
  * switching tabs reaches the code view that is already there rather than a new
  * one.
  */
+/** The bundled RAW and HEX formatters, whose output is shown with no language or gutter. */
+private val PLAIN_FORMATTER_IDS = setOf("bittrace.raw", "bittrace.hex")
+
 private sealed interface MonoContent {
-    /** Text for the code view, with the content type that picks its language. */
-    data class Code(val text: String, val contentType: String) : MonoContent
+    /**
+     * Text for the code view, with the content type that picks its language —
+     * or, when [plain], no language and no gutter at all.
+     */
+    data class Code(val text: String, val contentType: String, val plain: Boolean = false) : MonoContent
 
     /**
      * An image body, to be looked at rather than read.
@@ -886,6 +892,11 @@ private fun bodyContent(
 
     val body = formattedBody(row.id, side, bytes, formatter, mime)
         ?: return MonoContent.Note("formatting ${bytesStr(bytes.size.toLong())}…")
+    // RAW and HEX are the chips that claim to show the bytes, not a reading of
+    // them, so neither is coloured by the content type — and a hex dump is not
+    // in the body's language anyway: an SVG's lit up as XML wherever its digits
+    // happened to look like markup.
+    if (formatter.id in PLAIN_FORMATTER_IDS) return MonoContent.Code(body.text, mime, plain = true)
     return MonoContent.Code(body.text, mime)
 }
 

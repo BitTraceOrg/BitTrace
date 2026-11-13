@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -51,8 +52,11 @@ import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.PointerEventType
+import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.isPrimaryPressed
+import androidx.compose.ui.input.pointer.isSecondaryPressed
 import androidx.compose.ui.input.pointer.isShiftPressed
+import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
@@ -77,6 +81,10 @@ import org.bittrace.ui.P
 import org.bittrace.ui.Typo
 import org.bittrace.ui.components.PzText
 import org.bittrace.ui.components.TextInput
+import org.bittrace.ui.components.rememberCursorPositionProvider
+import org.jetbrains.jewel.ui.component.MenuScope
+import org.jetbrains.jewel.ui.component.PopupMenu
+import org.jetbrains.jewel.ui.component.separator
 
 /**
  * The editor on screen: one focusable box that draws only what is visible.
@@ -115,6 +123,9 @@ fun CodeSurface(
     val metrics = remember(textStyle, density) { EditorEngine.metrics(measurer, textStyle, density) }
     val focusRequester = remember { FocusRequester() }
     var focused by remember { mutableStateOf(false) }
+    // An I-beam over the text, the arrow over the gutter, as an editor's would be.
+    var overGutter by remember { mutableStateOf(false) }
+    var menuAt by remember { mutableStateOf<Offset?>(null) }
     var caretOn by remember { mutableStateOf(true) }
     val background by rememberUpdatedState(lineBackground)
     val padTop = with(density) { 2.dp.toPx() }
@@ -174,6 +185,7 @@ fun CodeSurface(
                 .focusRequester(focusRequester)
                 .onFocusChanged { focused = it.isFocused }
                 .focusable()
+                .pointerHoverIcon(if (overGutter) PointerIcon.Default else PointerIcon.Text)
                 .pointerInput(state) {
                     var dragging = false
                     var lastClick = 0L
@@ -196,6 +208,19 @@ fun CodeSurface(
                                 }
 
                                 PointerEventType.Press -> {
+                                    if (event.buttons.isSecondaryPressed) {
+                                        focusRequester.requestFocus()
+                                        val pos = change.position
+                                        // Outside the selection the caret moves to the
+                                        // click first, so Paste lands where you pointed;
+                                        // inside it, the selection stays for Cut and Copy.
+                                        val offset = offsetAt(pos)
+                                        val sel = state.selection
+                                        if (sel.isEmpty || offset < sel.start || offset > sel.end) state.moveTo(offset)
+                                        menuAt = pos
+                                        change.consume()
+                                        continue
+                                    }
                                     if (!event.buttons.isPrimaryPressed) continue
                                     focusRequester.requestFocus()
                                     caretOn = true
@@ -227,6 +252,8 @@ fun CodeSurface(
                                 }
 
                                 PointerEventType.Move -> {
+                                    val inGutter = gutter && change.position.x < gutterWidth()
+                                    if (inGutter != overGutter) overGutter = inGutter
                                     if (dragging && event.buttons.isPrimaryPressed) {
                                         val pos = change.position
                                         // Past an edge, scroll toward it.
@@ -276,6 +303,13 @@ fun CodeSurface(
             style = scrollbarStyle(styles),
         )
 
+        menuAt?.let { at ->
+            EditorMenu(state, at, onDismiss = {
+                menuAt = null
+                focusRequester.requestFocus()
+            })
+        }
+
         if (state.find.open) {
             FindBar(state, Modifier.align(Alignment.TopEnd).padding(top = 6.dp, end = 14.dp), onClose = {
                 state.find.open = false
@@ -295,6 +329,60 @@ private fun scrollbarStyle(styles: EditorStyles) = ScrollbarStyle(
     unhoverColor = styles.scrollThumb,
     hoverColor = styles.scrollThumbHover,
 )
+
+/** Opens find, seeded with the selection when it is a single line. */
+private fun openFind(state: CodeEditorState) {
+    val selected = state.selectedText()
+    if (selected.isNotEmpty() && '\n' !in selected) state.find.query = selected
+    state.find.open = true
+    state.find.focusRequests++
+}
+
+/**
+ * The right-click menu, opened at [at] inside the editor. Entries that cannot
+ * act — Cut with nothing selected, Paste in a read-only view — show disabled
+ * rather than vanish, so the menu keeps one shape.
+ */
+@Composable
+private fun EditorMenu(state: CodeEditorState, at: Offset, onDismiss: () -> Unit) {
+    val mod = if (EditorEngine.isMac) "⌘" else "Ctrl+"
+    val redoKey = if (EditorEngine.isMac) "⇧⌘Z" else "Ctrl+Y"
+    val hasSelection = !state.selection.isEmpty
+    val editable = !state.readOnly
+
+    PopupMenu(
+        onDismissRequest = { onDismiss(); true },
+        popupPositionProvider = rememberCursorPositionProvider(at),
+    ) {
+        fun entry(label: String, keys: String, enabled: Boolean, action: () -> Unit) =
+            menuEntry(label, keys, enabled) { action(); onDismiss() }
+        if (editable) {
+            entry("Undo", "${mod}Z", state.history.canUndo) { state.undo() }
+            entry("Redo", redoKey, state.history.canRedo) { state.redo() }
+            separator()
+            entry("Cut", "${mod}X", hasSelection) { state.cut() }
+        }
+        entry("Copy", "${mod}C", hasSelection) { state.copy() }
+        if (editable) entry("Paste", "${mod}V", true) { state.pasteFromClipboard() }
+        separator()
+        entry("Select All", "${mod}A", state.document.length > 0) { state.selectAll() }
+        entry("Find…", "${mod}F", true) { openFind(state) }
+    }
+}
+
+/**
+ * One entry. The shortcut is drawn here rather than in Jewel's keybinding slot,
+ * whose type is as large as the label's; a disabled entry fades all of it.
+ */
+private fun MenuScope.menuEntry(label: String, keys: String, enabled: Boolean, onClick: () -> Unit) {
+    selectableItem(selected = false, enabled = enabled, onClick = onClick) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            PzText(label, color = if (enabled) P.text else P.faint, style = Typo.label, family = P.Ui)
+            Spacer(Modifier.widthIn(min = 24.dp).weight(1f))
+            PzText(keys, color = P.faint, style = Typo.micro, family = P.Ui)
+        }
+    }
+}
 
 /** Maps a key press onto a command; returns whether it was one. */
 private fun handleKey(state: CodeEditorState, event: KeyEvent): Boolean {
@@ -350,12 +438,7 @@ private fun handleKey(state: CodeEditorState, event: KeyEvent): Boolean {
                 Key.V -> state.pasteFromClipboard()
                 Key.Z -> if (shift) state.redo() else state.undo()
                 Key.Y -> if (!EditorEngine.isMac) state.redo() else return false
-                Key.F -> {
-                    val selected = state.selectedText()
-                    if (selected.isNotEmpty() && '\n' !in selected) state.find.query = selected
-                    state.find.open = true
-                    state.find.focusRequests++
-                }
+                Key.F -> openFind(state)
 
                 Key.G -> state.findNext(forward = !shift)
                 Key.Minus, Key.NumPadSubtract -> state.foldAtCaret()

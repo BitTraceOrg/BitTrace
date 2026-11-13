@@ -950,7 +950,7 @@ private fun <T> RowScope.cellWidth(col: GridColumn<T>): Modifier =
  * right edge still shows the whole menu rather than half of it.
  */
 @Composable
-private fun rememberCursorPositionProvider(offsetInAnchor: Offset): PopupPositionProvider =
+internal fun rememberCursorPositionProvider(offsetInAnchor: Offset): PopupPositionProvider =
     remember(offsetInAnchor) {
         object : PopupPositionProvider {
             override fun calculatePosition(

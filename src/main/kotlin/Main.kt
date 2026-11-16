@@ -83,13 +83,21 @@ import org.bittrace.ui.FileDialogs
 import org.bittrace.ui.P
 import org.bittrace.ui.appIcon
 import org.bittrace.ui.components.PzText
+import org.bittrace.ui.components.editor.EditorEngine
 import org.bittrace.ui.bottomBorder
 import org.jetbrains.jewel.window.DecoratedWindow
 import org.jetbrains.jewel.window.DecoratedWindowScope
 import org.jetbrains.jewel.window.TitleBar
 import kotlin.time.Duration.Companion.milliseconds
 
-fun main() = application {
+fun main() {
+    // The code editor's shared parts — every language, built once — before
+    // the first window, so the first editor shown costs what the tenth does.
+    EditorEngine.init()
+    app()
+}
+
+private fun app() = application {
     val activity = remember { ActivityStore() }
     val store = remember { SessionStore(onLiveFlow = activity::record) }
     val settings = remember { SettingsStore() }

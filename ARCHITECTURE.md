@@ -290,8 +290,9 @@ the default Java cup.
 `BodyFormatter` (in `:plugin-api`) turns bytes into text plus `Span`s tagged
 with a semantic `TokenKind`. Formatters never choose colours — the host maps
 kinds onto the active palette, so highlighting recolours with the theme. The
-same lexers drive the request body editor through a `VisualTransformation`,
-which is why a JSON body looks the same while you type it and after it is sent.
+code editor's own tokenizers are resumable ports of these lexers, classifying
+with the same `TokenKind`s, which is why a JSON body looks the same while you
+type it and after it is sent.
 
 Formatters are called off the UI thread and must be stateless. The bundled set
 is Raw, Hex, JSON, XML, HTML, CSS, JS, TS and GraphQL; all but Raw and Hex are
@@ -353,49 +354,66 @@ kept pure and covered by `DiffTest`; it trims the common head and tail before
 building an LCS table, and past `CELL_LIMIT` reports the middle as one block
 rather than hanging the window on an exact answer.
 
-Both sides are drawn by `tools/DiffPane.kt`, which is the app's own KodeMirror
-surface with the same read-only bundle every other captured body is read
-through — so a compared response is syntax-highlighted by its media type,
-searchable with `Mod-F`, selectable and foldable. The diff's own colours are
-line decorations contributed by a `ViewPlugin`, the shape the port's
-`highlightActiveLine` uses. Each pane's document is the *aligned* text, one line
-per row and blank where that side has no line, so both have the same line count
-and one scroll outside them keeps them level; that means both are laid out at
-full height, which is why the view caps at `MAX_ROWS` and says so when it
-clipped. The gutter therefore numbers aligned rows rather than each file's own
-lines — the two sides agree on every number, which is what reading across a diff
-wants.
+Both sides are drawn by `tools/DiffPane.kt`, which is the app's own code
+surface in read-only mode — so a compared response is syntax-highlighted by its
+media type, searchable with `Mod-F` and selectable. The diff's colours are a
+per-line wash the surface paints from a `lineBackground` callback, looked up
+while drawing so they follow a theme switch. Each pane's document is the
+*aligned* text, one line per row and blank where that side has no line, so both
+have the same line count; both take one shared `EditorScrollState`, which is all
+it takes to keep them level. Since each pane draws only the rows on screen there
+is no cap on rows any more. Folding is off in the diff, because a fold on one
+side would pull the rows out of line. The gutter numbers aligned rows rather
+than each file's own lines — the two sides agree on every number, which is what
+reading across a diff wants.
 
 ## The code surface
 
-Editing and viewing both go through `ui/CodeEditor.kt`, over
-[KodeMirror](https://github.com/Monkopedia/kodemirror) — a native Kotlin port of
-CodeMirror 6, no WebView and no JS bridge, built against the same Compose 1.11.1
-Jewel pins. It replaced a hand-rolled gutter, find bar, completion popup and
-line-splitting viewer with machinery that was already tested against
-CodeMirror's own suite, and brought folding, bracket matching and undo the app
-never had.
+Editing and viewing both go through `ui/components/CodeEditor.kt`, over an
+editor written here (`ui/components/editor/`), native Compose with no WebView.
+It replaced KodeMirror, whose sessions were fixed at construction — a language
+or theme change rebuilt the editor and lost its undo history — and which had to
+be laid out at full height to carry a scrollbar, so it capped at 2,000 lines and
+ran out of heap not far past that.
 
-`CodeEditor` edits and `CodeView` reads; they are the same component with
-`readOnly`/`editable` flipped, so a viewer cannot drift from the editor beside
-it. A session owns its document once built, so the language, the theme and the
-read-only flag are fixed at construction and a `key(...)` rebuilds the session
-when one really changes — the alternative is reconfiguring a live editor, and
-the cost is undo history on a rare event.
+It is in three layers.
 
-`ui/editor/EditorTheming.kt` derives the editor theme from the active `Palette`,
-the same job `JewelBridge` does for Jewel and for the same reason: adopting one
-of the seventeen bundled themes would have ended theme plugins' hold on the
-editor. `languageFor` maps a content type to a language with the same loose
-matching the body formatters use.
+- **Shared** (`EditorEngine`, `LanguageRegistry`). Everything that does not
+  belong to one editor: every language, built once at startup (`main` calls
+  `EditorEngine.init()` before the first window), the palette-derived styles,
+  memoized per palette, the font metrics per face, size and density, the one
+  `TextMeasurer` all editors draw through, and the `HighlightScheduler`, which
+  paces background highlighting across every open editor under one per-frame
+  budget, driven by the frame clock so it stays on the UI thread.
+- **Per editor** (`CodeEditorState`, with no UI in it). The document is a
+  line list (`TextDocument`); `EditHistory` is undo/redo with typing runs merged;
+  `Highlighter` keeps one tokenizer state per line and, after an edit, re-lexes
+  only until the states converge with what they were; `FoldModel` maps visual
+  rows to lines; `FindModel` holds the search. `language`, `readOnly` and the
+  text all change in place, so nothing is rebuilt for any of them.
+- **View** (`CodeSurface`). One focusable box that draws only the visible rows,
+  and of each row only the chunks the viewport crosses, on a monospace grid
+  (`Columns`) so the x of any offset is arithmetic. Scroll offsets are doubles in
+  `EditorScrollState`, which implements the `Double`-based scrollbar adapter, so
+  a million lines or a five-megabyte line scroll like a short body. Everything
+  the picture depends on is read in the draw phase, so typing, scrolling and a
+  theme switch repaint without recomposing.
 
-`ui/editor/GraphQlLanguage.kt` is a language written here, because upstream has
-22 and GraphQL is not among them. It is a `StreamParser` — a hand-written
-tokenizer, which suits a grammar whose lexical part is small and whose only
-context-sensitivity is whether a name is a type. Two booleans carry that; a
-parse tree per keystroke would not be worth what it bought. It ships its own
-completion source: the language's words plus the identifiers the document has
-already used, with no schema and no introspection.
+`CodeEditor` edits and `CodeView` reads; they are the same surface with
+`readOnly` flipped, so a viewer cannot drift from the editor beside it. The view
+has a line-number gutter, folding (brackets for JSON, JS, CSS and GraphQL, tags
+for XML and HTML), bracket matching, and a find bar on `Mod-F`. `plain` turns off
+the gutter, folding and colour for views that claim nothing was done to their
+text.
+
+Languages are `Tokenizer`s (`editor/lang/`): resumable lexers whose whole state
+is one `Int`, so the highlighter can keep one per line and stop a long line at
+any token boundary and pick it up again. They are ports of the formatter lexers
+in `plugin/builtin/Highlight.kt` with the multi-line constructs — block
+comments, template and block strings, tags whose attributes run over lines,
+HTML `<script>` bodies — carried in the state. `languageFor` maps a content type
+to one with the same loose matching the body formatters use, and returns the
+same instance every time.
 
 **What the formatters lost.** `BodyFormatter.format` still runs — pretty-printing
 a minified body is the part that mattered — but `BodyFormatter.highlight` is no

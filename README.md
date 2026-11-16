@@ -44,7 +44,8 @@ went.
   and logged rather than hidden.
 - **HAR import and export**, and a **diff tool** for comparing two flows —
   side by side in the same editor the inspector uses, so both halves are
-  highlighted, searchable and foldable while the changed lines stay washed.
+  highlighted and searchable while the changed lines stay washed, and the two
+  scroll as one at any length.
 
 ### The Forge — an API client
 

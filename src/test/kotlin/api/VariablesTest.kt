@@ -1,6 +1,5 @@
 package org.bittrace.api
 
-import org.bittrace.ui.components.editor.graphql
 import java.nio.file.Files
 import java.nio.file.Path
 import kotlin.io.path.createDirectories
